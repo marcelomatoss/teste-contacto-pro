@@ -20,23 +20,30 @@
 ## Visão geral
 
 ```
-┌──────────────────────────────────────────────────────────────────────┐
-│                          docker compose up                           │
-│                                                                      │
-│   ┌─────────────────────────┐    Socket.IO    ┌─────────────────┐    │
-│   │   backend (Node + TS)   │ ◄────────────►  │  frontend (Vite)│    │
-│   │                         │                  │                 │    │
-│   │   Express + Socket.IO   │ ◄── REST API ──  │  React + TW     │    │
-│   │   Baileys (WhatsApp)    │                  │  Inbox UI       │    │
-│   │   Prisma + SQLite       │                  │                 │    │
-│   │   Claude / Whisper / TTS│                  │                 │    │
-│   └────────────┬────────────┘                  └─────────────────┘    │
-│                │                                                      │
-│   Volumes locais:                                                    │
-│     ./data/sqlite.db    (banco)                                      │
-│     ./data/wa-session/  (sessão WhatsApp persistida)                 │
-│     ./data/media/       (áudios in/out)                              │
-└──────────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────┐
+│                            docker compose up                              │
+│                                                                          │
+│   ┌──────────────────────────┐    Socket.IO    ┌─────────────────────┐   │
+│   │   backend (Node + TS)    │ ◄────────────►  │  frontend (nginx)   │   │
+│   │                          │                  │  React 18 build     │   │
+│   │   Express + Socket.IO    │ ◄── REST API ──  │  static + SPA       │   │
+│   │   Baileys (WhatsApp)     │                  │  fallback           │   │
+│   │   Prisma + SQLite        │                  └─────────────────────┘   │
+│   │   Claude / Whisper / TTS │                                            │
+│   │   JWT auth + multi-tenant│         ┌──────────────────┐               │
+│   │   BullMQ worker          │ ◄──────►│  redis (BullMQ)  │               │
+│   └────────┬─────────────────┘         └──────────────────┘               │
+│            │                                                              │
+│            └────► /metrics ────► prometheus ──► grafana (dashboard)       │
+│                                                                          │
+│   Volumes locais (./data/):                                              │
+│     sqlite.db          banco                                              │
+│     wa-session/<wsId>/ sessão WhatsApp por workspace                     │
+│     media/             áudios in/out                                      │
+│     redis/             AOF persistence                                    │
+│     rag-cache.json     embeddings cacheados                              │
+│     prometheus/        time-series                                        │
+└──────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Stack
@@ -373,7 +380,7 @@ Cobre:
 LLMs externos são **mockados** (`vi.mock`), então rodam offline em ~2s sem
 custar tokens.
 
-### E2E (frontend) — 11 testes Playwright
+### E2E (frontend) — 15 testes Playwright
 
 ```bash
 cd frontend
@@ -393,6 +400,10 @@ login bem-sucedido leva à inbox, sessão persiste em reload, logout volta
 com suas mensagens, lead panel reflete dados extraídos pela IA + intent,
 indicadores de serviço (LLM/STT/TTS/QUEUE) aparecem como ativos, badges de
 status na lista, busca filtra conversas.
+
+**Convite de usuário (4)**: modal abre pelo menu do usuário, criação
+bem-sucedida mostra estado de sucesso, senha curta é rejeitada
+client-side, erro de email duplicado vem do servidor.
 
 ## Observabilidade (Prometheus + Grafana)
 
@@ -420,15 +431,22 @@ Métricas customizadas expostas pelo backend:
 ## Auth + Multi-tenant
 
 - **JWT + bcrypt**: login via email/senha, token TTL configurável
-  (default 72h)
+  (default 72h), enviado via `Authorization: Bearer` ou `?token=` para
+  endpoints estáticos (mídia)
 - **Workspace** isolado: cada tenant tem seu próprio número WhatsApp,
-  sessão Baileys, conversas, leads e mensagens
+  sessão Baileys (`./data/wa-session/<workspaceId>/`), conversas, leads
+  e mensagens
 - **Per-workspace Socket.IO rooms**: emits do servidor não vazam entre
-  tenants
+  tenants. JWT é validado no handshake do socket
 - **JobId per-workspace**: `${workspaceId}_${jid}_${messageId}` —
   idempotência sem colisão cross-tenant
-- **Seed automático**: na primeira execução com banco vazio, cria um
-  workspace default + admin com base no `.env`
+- **Seed automático**: na primeira execução com banco vazio, cria o
+  workspace + admin com base no `.env`
+- **Convite de usuários** dentro do workspace pelo menu do app
+  (ícone de avatar → "Convidar usuário"), abre modal com email + senha
+  temporária. Cria via `POST /api/auth/register` (autenticado).
+- **Logout completo** pela UI (botão no menu) limpa token, fecha socket
+  e volta para a tela de login
 
 ---
 
@@ -535,15 +553,27 @@ está respondendo pelo bot). Mantive a inbox **read-only** com aviso claro.
 
 ### Tempo aproximado de execução
 
-**~5h45** das 6h estipuladas (sobrou margem para polimento + README).
+**P1 + P2 + parte de P3 entregues dentro da janela de 6h.** Os itens P3
+restantes (RAG mais elaborado, testes, redesign de UI, fila Redis,
+Prometheus/Grafana, multi-tenant, auth, nginx prod, Playwright, modal de
+convite) foram implementados em iterações posteriores — visíveis no
+histórico de commits.
 
-Distribuição:
+Distribuição da primeira janela (6h):
 1. Setup + esqueleto (~30min)
-2. Backend (Baileys, prisma, pipeline) (~1h45)
+2. Backend Baileys + Prisma + pipeline (~1h45)
 3. AI integrations (LLM, intent, qualify, STT, TTS) (~1h)
 4. Frontend completo (~1h30)
 5. Docker Compose + smoke tests (~30min)
 6. README + KB + commits + verificação (~30min)
+
+Iterações posteriores (escopo ampliado):
+- BullMQ + Redis + retries + idempotência (~1h)
+- RAG com embeddings + cache em disco (~45min)
+- Vitest 35 testes (~1h)
+- Redesign do frontend seguindo UI/UX Pro Max (~2h)
+- JWT auth + multi-tenant workspace (~3h)
+- Nginx prod + Prometheus + Grafana + Playwright + modal de convite (~2h30)
 
 ---
 
@@ -559,42 +589,51 @@ Distribuição:
 ### O que ficou completo
 
 #### Prioridade 1 (obrigatório)
-✅ Conexão WhatsApp via **Baileys** com QR no terminal **e** na UI
-✅ Reconexão automática (exceto quando logged-out)
-✅ Recebimento de **texto**
-✅ Envio de texto **como reply** à mensagem original
-✅ **Reaction** 👍 / ✅ / 👌 / ⚠️ na mensagem inbound
-✅ **IA real** (Claude Sonnet 4.5) gerando resposta
-✅ **Frontend React + Tailwind** com 3-painéis (lista, chat, painel do lead)
-✅ **Socket.IO** com 9 eventos cobrindo todo o pipeline
-✅ **Persistência completa** (SQLite via Prisma) — recarregar mantém tudo
-✅ **Docker Compose** subindo backend + frontend + redis com volumes
-✅ **README completo** com AI Usage Report
-✅ **Histórico de commits** progressivos (16+)
+- Conexão WhatsApp via **Baileys** com QR no terminal **e** na UI
+- Reconexão automática (e detecção de logout pelo celular → wipe + novo QR)
+- Recebimento de **texto**
+- Envio de texto **como reply** à mensagem original
+- **Reaction** 👍 / ✅ / 👌 / ⚠️ na mensagem inbound
+- **IA real** (Claude Sonnet 4.5) gerando resposta
+- **Frontend React + Tailwind** com 3-painéis (lista, chat, painel do lead)
+- **Socket.IO** com 9 eventos cobrindo todo o pipeline
+- **Persistência completa** (SQLite via Prisma)
+- **Docker Compose** subindo todos os serviços
+- **README completo** com AI Usage Report
+- Histórico de commits progressivos
 
 #### Prioridade 2 (alta pontuação)
-✅ **Áudio inbound**: download + STT (Whisper) com transcrição exibida
-✅ **Áudio outbound**: TTS (OpenAI) quando inbound foi áudio (regra mínima)
-✅ **Classificação de intent** em 9 categorias
-✅ **Qualificação de lead** (nome, empresa, interesse, objetivo, volume)
-✅ **Mudança automática de status** (qualified / needs_human / opt_out)
-✅ Indicador "**IA pensando…**"
-✅ Distinção visual clara user vs bot, texto vs áudio
-✅ Painel do lead com dados extraídos pela IA, intent + status
+- **Áudio inbound**: download + STT (Whisper) com transcrição exibida
+- **Áudio outbound**: TTS (OpenAI) quando inbound foi áudio
+- **Classificação de intent** em 9 categorias
+- **Qualificação de lead** (nome, empresa, interesse, objetivo, volume)
+- **Mudança automática de status** (qualified / needs_human / opt_out)
+- Indicador "IA pensando…"
+- Painel do lead com dados extraídos pela IA, intent + status
 
-#### Prioridade 3 (diferencial)
-✅ **Fila assíncrona** (BullMQ + Redis)
-✅ **Retries** (4 tentativas com backoff exponencial)
-✅ **Idempotência** (jobId = jid + whatsappMessageId)
-✅ **RAG real** (embeddings OpenAI + cosine similarity + cache em disco)
-✅ **35 testes automatizados** (Vitest, com LLM mockado)
-✅ **Multi-conversa** com agrupamento por status
-✅ **UI organizada** seguindo design system UI/UX Pro Max
+#### Prioridade 3 (diferencial) — todos implementados
+- **Fila assíncrona** (BullMQ + Redis) com retries (4 tentativas, backoff
+  exponencial) e idempotência via `jobId = workspaceId + jid + messageId`
+- **RAG real** com embeddings OpenAI + cosine similarity, cache em disco
+- **41 testes Vitest** (LLM mockado, rodam offline em ~2s)
+- **15 testes Playwright E2E** (auth + inbox + invite, backend mockado)
+- **Multi-conversa** com agrupamento por status
+- UI seguindo design system **UI/UX Pro Max**
+- **Multi-tenant**: Workspace model com isolamento total (sessão WhatsApp,
+  conversas, leads, mensagens, room Socket.IO)
+- **Auth (JWT)** no frontend com login, logout, sessão persistente,
+  middleware no backend, seed de admin no boot
+- **Cadastro de usuário** dentro do workspace (modal "Convidar usuário"
+  no menu do usuário)
+- **Build estático + nginx** em produção (multi-stage Dockerfile)
+- **Métricas Prometheus** com 9 métricas customizadas + middleware HTTP
+- **Dashboard Grafana** auto-provisionado com 8 painéis
 
-### O que ficou incompleto (não-críticos)
+### O que ficaria pra próxima iteração
 
-- **Multi-tenant** (cada workspace com seu número WhatsApp + KB)
-- **Auth no frontend** (demo single-user, sem requisito)
-- **Build estático do frontend + nginx** (Vite dev em prod basta para o desafio)
-- **Métricas Prometheus** (logs estruturados existem, dashboard não)
-- **Testes E2E com Playwright** (testes unitários cobrem a lógica determinística)
+- Onboarding self-service (criar workspace novo via tela de signup)
+- Reset de senha por email no primeiro login (hoje a senha temporária é
+  compartilhada manualmente)
+- Roles granulares (owner / admin / member com permissões diferentes)
+- WhatsApp Business Cloud API como adapter alternativo (Baileys oficialmente
+  não é suportado pelo WhatsApp)
