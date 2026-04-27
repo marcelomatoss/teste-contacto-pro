@@ -9,8 +9,8 @@
 ![Stack](https://img.shields.io/badge/node-22-339933?logo=node.js&logoColor=white)
 ![Baileys](https://img.shields.io/badge/WhatsApp-Baileys-25D366?logo=whatsapp&logoColor=white)
 ![Anthropic](https://img.shields.io/badge/LLM-Claude%20Sonnet%204.5-D97757?logoColor=white)
-![Whisper](https://img.shields.io/badge/STT-Whisper-412991?logo=openai&logoColor=white)
-![TTS](https://img.shields.io/badge/TTS-OpenAI%20gpt--4o--mini-412991?logo=openai&logoColor=white)
+![STT](https://img.shields.io/badge/STT-OpenAI-412991?logo=openai&logoColor=white)
+![TTS](https://img.shields.io/badge/TTS-OpenAI-412991?logo=openai&logoColor=white)
 ![React](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=white)
 ![Tailwind](https://img.shields.io/badge/Tailwind-3-06B6D4?logo=tailwindcss&logoColor=white)
 ![Prisma](https://img.shields.io/badge/Prisma-SQLite-2D3748?logo=prisma&logoColor=white)
@@ -29,7 +29,7 @@
 │   │   Express + Socket.IO    │ ◄── REST API ──  │  static + SPA       │   │
 │   │   Baileys (WhatsApp)     │                  │  fallback           │   │
 │   │   Prisma + SQLite        │                  └─────────────────────┘   │
-│   │   Claude / Whisper / TTS │                                            │
+│   │   Anthropic + OpenAI    │                                            │
 │   │   JWT auth + multi-tenant│         ┌──────────────────┐               │
 │   │   BullMQ worker          │ ◄──────►│  redis (BullMQ)  │               │
 │   └────────┬─────────────────┘         └──────────────────┘               │
@@ -61,7 +61,7 @@
 | Multi-tenant | **Workspace** model com isolamento total             |
 | LLM          | **Anthropic Claude Sonnet 4.5** (chat + classificação)|
 | RAG          | **OpenAI text-embedding-3-small** + cosine similarity |
-| STT          | **OpenAI Whisper** (`whisper-1`)                      |
+| STT          | **OpenAI** (transcrição de áudio)                     |
 | TTS          | **OpenAI** (`gpt-4o-mini-tts`)                        |
 | Métricas     | **Prometheus + Grafana** (dashboard auto-provisionado) |
 | Testes       | **Vitest** (41 unit) + **Playwright** (11 E2E)        |
@@ -148,9 +148,8 @@ AI_PROVIDER=anthropic                            # anthropic | openai
 AI_MODEL=claude-sonnet-4-5-20250929
 AI_API_KEY=sk-ant-...
 
-# STT (transcrição)
+# STT (transcrição de áudio)
 STT_PROVIDER=openai
-STT_MODEL=whisper-1
 STT_API_KEY=sk-...
 
 # TTS (resposta em áudio)
@@ -262,7 +261,7 @@ backend/src/
 │   ├── llm.ts                    # Anthropic + system prompt
 │   ├── intent.ts                 # classificação em 9 categorias
 │   ├── qualify.ts                # extração de dados do lead
-│   ├── stt.ts                    # Whisper
+│   ├── stt.ts                    # OpenAI STT
 │   └── tts.ts                    # OpenAI TTS
 ├── pipeline/handleInbound.ts     # orquestra todo o fluxo
 ├── routes/                       # REST: conversations, messages, media, status
@@ -275,7 +274,7 @@ backend/src/
 1.  Baileys recebe mensagem
 2.  Identifica/cria Conversation pelo JID
 3.  Persiste Message inbound      → emit wa.message.received
-4a. (áudio) Download → Whisper    → emit audio.transcribed
+4a. (áudio) Download → OpenAI STT → emit audio.transcribed
 4b. (texto) usa o conteúdo
 5.  Reage 👍                      → emit wa.reaction.sent
 6.  emit ai.thinking { on: true }
@@ -320,7 +319,7 @@ Message      { id, conversationId, direction, type, content, mediaPath, transcri
 | **SQLite + Prisma**                    | Postgres                    | Zero infra, atende o desafio, file-based em volume Docker      |
 | **BullMQ + Redis para fila**           | Processamento síncrono      | Permite retries com backoff, idempotência via jobId, escala    |
 | **RAG com embeddings + in-memory**     | RAG vetorial em DB / só KB  | KB pequena (~8 chunks), embeddings cacheados em disco, simples |
-| **TTS+STT no mesmo provider (OpenAI)** | Whisper local + ElevenLabs  | Menos chaves, menos código, latência ok                        |
+| **TTS+STT no mesmo provider (OpenAI)** | STT self-hosted + ElevenLabs| Menos chaves, menos código, latência ok                        |
 | **Vite dev server em produção**        | Build estático + nginx      | Para o desafio basta — README documenta o atalho               |
 | **Vitest para testes unitários**       | Jest                        | TS-first, sem config-hell, integra com vite                    |
 | **Sem auth no frontend**               | Login + sessão              | Demo single-user, não há requisito de multi-tenant             |
@@ -496,7 +495,7 @@ Métricas customizadas expostas pelo backend:
   prompts, frontend, Docker.
 - **Anthropic API (Claude Sonnet 4.5)** — runtime do bot (geração, classificação
   e qualificação).
-- **OpenAI Whisper / TTS** — STT e TTS em runtime.
+- **OpenAI** — STT e TTS em runtime.
 
 ### Onde usei IA
 
@@ -603,7 +602,7 @@ Iterações posteriores (escopo ampliado):
 - Histórico de commits progressivos
 
 #### Prioridade 2 (alta pontuação)
-- **Áudio inbound**: download + STT (Whisper) com transcrição exibida
+- **Áudio inbound**: download + STT (OpenAI) com transcrição exibida
 - **Áudio outbound**: TTS (OpenAI) quando inbound foi áudio
 - **Classificação de intent** em 9 categorias
 - **Qualificação de lead** (nome, empresa, interesse, objetivo, volume)

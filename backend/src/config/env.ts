@@ -31,7 +31,7 @@ const envSchema = z.object({
   AI_API_KEY: z.string().optional(),
 
   STT_PROVIDER: z.string().default("openai"),
-  STT_MODEL: z.string().default("whisper-1"),
+  STT_MODEL: z.string().default("gpt-4o-mini-transcribe"),
   STT_API_KEY: z.string().optional(),
 
   TTS_PROVIDER: z.string().default("openai"),
