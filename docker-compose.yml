@@ -1,0 +1,44 @@
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    image: contactpro-bot-backend:latest
+    container_name: contactpro-backend
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    environment:
+      NODE_ENV: production
+      PORT: 3001
+      DATABASE_URL: file:/app/data/sqlite.db
+      WHATSAPP_SESSION_PATH: /app/data/wa-session
+      MEDIA_PATH: /app/data/media
+      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:5173}
+      AI_PROVIDER: ${AI_PROVIDER:-anthropic}
+      AI_MODEL: ${AI_MODEL:-claude-sonnet-4-5-20250929}
+      AI_API_KEY: ${AI_API_KEY:-}
+      STT_PROVIDER: ${STT_PROVIDER:-openai}
+      STT_MODEL: ${STT_MODEL:-whisper-1}
+      STT_API_KEY: ${STT_API_KEY:-}
+      TTS_PROVIDER: ${TTS_PROVIDER:-openai}
+      TTS_MODEL: ${TTS_MODEL:-gpt-4o-mini-tts}
+      TTS_VOICE: ${TTS_VOICE:-alloy}
+      TTS_API_KEY: ${TTS_API_KEY:-}
+    volumes:
+      - ./data:/app/data
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    image: contactpro-bot-frontend:latest
+    container_name: contactpro-frontend
+    restart: unless-stopped
+    ports:
+      - "5173:5173"
+    environment:
+      VITE_API_URL: ${VITE_API_URL:-http://localhost:3001}
+      VITE_SOCKET_URL: ${VITE_SOCKET_URL:-http://localhost:3001}
+    depends_on:
+      - backend
