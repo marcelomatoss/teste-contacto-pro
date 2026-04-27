@@ -15,15 +15,15 @@ out/
 .env.*.local
 !.env.example
 
-# Database
+# Runtime data — nothing inside ./data should be committed:
+#   sqlite.db / sqlite.db-journal — Prisma database (regenerated)
+#   wa-session/                    — Baileys credentials (sensitive!)
+#   media/                         — inbound + generated audio
+#   redis/                         — Redis AOF persistence
+#   rag-cache.json                 — embeddings cache (regenerated)
 *.db
 *.db-journal
-data/sqlite.db
-data/sqlite.db-journal
-
-# WhatsApp session (NEVER commit)
-data/wa-session/
-data/media/
+data/
 
 # Logs
 *.log
