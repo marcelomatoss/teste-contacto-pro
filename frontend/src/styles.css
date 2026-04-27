@@ -2,10 +2,12 @@
 @tailwind components;
 @tailwind utilities;
 
-/* ──────────────────────────────────────────────────────────
-   Design tokens — UI/UX Pro Max "Chat & Messaging App" preset
-   ────────────────────────────────────────────────────────── */
+/* ════════════════════════════════════════════════════════════════════
+   Design System — UI/UX Pro Max "Chat & Messaging App" preset
+   Style: Minimalism + Micro-interactions + Glassmorphism
+   ════════════════════════════════════════════════════════════════════ */
 :root {
+  /* Color tokens (WCAG AA verified) */
   --color-primary: 37 99 235;          /* #2563EB messenger blue */
   --color-primary-fg: 255 255 255;
   --color-secondary: 99 102 241;        /* #6366F1 indigo */
@@ -19,12 +21,41 @@
   --color-destructive: 220 38 38;       /* #DC2626 */
   --color-ring: 37 99 235;
 
+  /* Type scale (modular: 12 14 16 18 24 32) — UX guideline */
+  --type-xs: 0.75rem;     /* 12 */
+  --type-sm: 0.875rem;    /* 14 */
+  --type-base: 1rem;      /* 16 */
+  --type-lg: 1.125rem;    /* 18 */
+  --type-xl: 1.5rem;      /* 24 */
+  --type-2xl: 2rem;       /* 32 */
+
+  /* Radius scale */
   --radius-sm: 0.375rem;
   --radius-md: 0.625rem;
   --radius-lg: 0.875rem;
   --radius-xl: 1rem;
+  --radius-2xl: 1.25rem;
 
-  --shadow-glass:
+  /* Z-index scale (UX guideline: defined, no arbitrary 9999) */
+  --z-base: 0;
+  --z-content: 10;
+  --z-sticky: 20;
+  --z-overlay: 30;
+  --z-modal: 40;
+  --z-toast: 50;
+
+  /* Easing tokens */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+  --duration-fast: 100ms;
+  --duration-base: 180ms;
+  --duration-slow: 280ms;
+
+  /* Glass surface — UI/UX Pro Max Glassmorphism guidelines */
+  --glass-blur: 14px;
+  --glass-bg: rgba(255, 255, 255, 0.72);
+  --glass-border: rgba(255, 255, 255, 0.5);
+  --glass-shadow:
     0 1px 0 0 rgb(255 255 255 / 0.6) inset,
     0 -1px 0 0 rgb(15 23 42 / 0.04) inset,
     0 4px 24px -6px rgb(15 23 42 / 0.08);
@@ -36,9 +67,16 @@ body,
   height: 100%;
 }
 
+html {
+  text-size-adjust: 100%;
+  -webkit-text-size-adjust: 100%;
+}
+
 body {
   font-family: "Open Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI",
     Roboto, sans-serif;
+  font-size: var(--type-base);
+  line-height: 1.5;
   font-feature-settings: "cv11", "ss01";
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
@@ -53,6 +91,7 @@ body {
 h1, h2, h3, h4, h5, h6 {
   font-family: "Poppins", "Open Sans", ui-sans-serif, system-ui, sans-serif;
   letter-spacing: -0.011em;
+  line-height: 1.2;
 }
 
 /* ──────────────────────────────────────────────────────────
@@ -77,7 +116,7 @@ h1, h2, h3, h4, h5, h6 {
 }
 
 /* ──────────────────────────────────────────────────────────
-   Focus ring — acessibilidade WCAG AA, evitando halo geral
+   Focus ring — visível, WCAG AA
    ────────────────────────────────────────────────────────── */
 :focus-visible {
   outline: 2px solid rgb(var(--color-ring));
@@ -85,15 +124,40 @@ h1, h2, h3, h4, h5, h6 {
   border-radius: 8px;
 }
 
+/* Hide default focus on mouse, show on keyboard (handled by :focus-visible) */
+:focus:not(:focus-visible) {
+  outline: none;
+}
+
+/* ──────────────────────────────────────────────────────────
+   Reduced motion — UX guideline
+   ────────────────────────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
 /* ──────────────────────────────────────────────────────────
    Utilities — micro-interactions + glass surface
    ────────────────────────────────────────────────────────── */
 @layer utilities {
   .glass {
-    background-color: rgb(255 255 255 / 0.72);
-    backdrop-filter: saturate(180%) blur(14px);
-    -webkit-backdrop-filter: saturate(180%) blur(14px);
-    box-shadow: var(--shadow-glass);
+    background-color: var(--glass-bg);
+    backdrop-filter: saturate(180%) blur(var(--glass-blur));
+    -webkit-backdrop-filter: saturate(180%) blur(var(--glass-blur));
+    box-shadow: var(--glass-shadow);
+  }
+  .glass-strong {
+    background-color: rgba(255, 255, 255, 0.85);
+    backdrop-filter: saturate(180%) blur(20px);
+    -webkit-backdrop-filter: saturate(180%) blur(20px);
+    box-shadow: var(--glass-shadow);
   }
   .skeleton {
     background-image: linear-gradient(
@@ -106,9 +170,41 @@ h1, h2, h3, h4, h5, h6 {
     animation: skeleton 1.6s ease-in-out infinite;
   }
   .press {
-    transition: transform 100ms ease, background-color 150ms ease;
+    transition: transform var(--duration-fast) var(--ease-in-out);
   }
   .press:active {
     transform: scale(0.97);
+  }
+  .ring-focus {
+    @apply focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2 focus-visible:outline-none;
+  }
+  /* WhatsApp-style avatar with online dot */
+  .avatar-with-status {
+    position: relative;
+  }
+  .avatar-with-status[data-status="online"]::after {
+    content: "";
+    position: absolute;
+    bottom: -1px;
+    right: -1px;
+    width: 0.75rem;
+    height: 0.75rem;
+    background-color: rgb(var(--color-accent));
+    border: 2px solid white;
+    border-radius: 9999px;
+    box-shadow: 0 0 0 0 rgba(5, 150, 105, 0.6);
+    animation: pulse-ring 2s ease-out infinite;
+  }
+}
+
+@keyframes pulse-ring {
+  0% {
+    box-shadow: 0 0 0 0 rgba(5, 150, 105, 0.6);
+  }
+  70% {
+    box-shadow: 0 0 0 7px rgba(5, 150, 105, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(5, 150, 105, 0);
   }
 }

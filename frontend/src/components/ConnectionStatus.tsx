@@ -9,10 +9,17 @@ interface Props {
 
 const config: Record<
   Status,
-  { label: string; dot: string; ring: string; bg: string; icon: typeof CheckCircle2; iconClass: string }
+  {
+    label: string;
+    dot: string;
+    ring: string;
+    bg: string;
+    icon: typeof CheckCircle2;
+    iconClass: string;
+  }
 > = {
   connected: {
-    label: "WhatsApp conectado",
+    label: "Conectado",
     dot: "bg-accent-500",
     ring: "ring-accent-200",
     bg: "bg-accent-50",
@@ -20,7 +27,7 @@ const config: Record<
     iconClass: "text-accent-600",
   },
   connecting: {
-    label: "Conectando…",
+    label: "Conectando",
     dot: "bg-amber-400",
     ring: "ring-amber-200",
     bg: "bg-amber-50",
@@ -28,7 +35,7 @@ const config: Record<
     iconClass: "text-amber-600 animate-spin",
   },
   qr: {
-    label: "Escaneie o QR Code",
+    label: "Aguardando QR",
     dot: "bg-brand-500",
     ring: "ring-brand-200",
     bg: "bg-brand-50",
@@ -50,13 +57,15 @@ export const ConnectionPill = ({ status }: { status: Status }) => {
   const Icon = cfg.icon;
   return (
     <div
+      role="status"
+      aria-live="polite"
       className={clsx(
-        "flex items-center gap-2 rounded-full px-3 py-1.5 ring-1 transition-all duration-200",
+        "flex items-center gap-2 rounded-full px-3 py-1.5 ring-1 transition-colors duration-base",
         cfg.bg,
         cfg.ring,
       )}
     >
-      <span className="relative flex h-2 w-2">
+      <span aria-hidden className="relative flex h-2 w-2">
         <span
           className={clsx(
             "absolute inline-flex h-full w-full rounded-full opacity-70 animate-pulse-slow",
@@ -65,8 +74,8 @@ export const ConnectionPill = ({ status }: { status: Status }) => {
         />
         <span className={clsx("relative inline-flex h-2 w-2 rounded-full", cfg.dot)} />
       </span>
-      <Icon className={clsx("h-3.5 w-3.5", cfg.iconClass)} />
-      <span className="text-xs font-semibold text-slate-700">{cfg.label}</span>
+      <Icon className={clsx("h-3.5 w-3.5", cfg.iconClass)} aria-hidden />
+      <span className="text-xs font-bold tracking-tight text-slate-700">{cfg.label}</span>
     </div>
   );
 };
@@ -74,57 +83,68 @@ export const ConnectionPill = ({ status }: { status: Status }) => {
 export const QRPanel = ({ qr }: { qr: string | null | undefined }) => {
   if (!qr) return null;
   return (
-    <div className="glass animate-slide-up rounded-2xl p-6 ring-1 ring-slate-200/70">
+    <div
+      className="glass-strong animate-slide-down rounded-2xl p-6 ring-1 ring-slate-200/70"
+      role="dialog"
+      aria-label="Pareamento do WhatsApp"
+    >
       <div className="grid items-center gap-6 md:grid-cols-[auto_1fr]">
+        {/* QR */}
         <div className="relative mx-auto md:mx-0">
-          <div className="absolute inset-0 -z-10 rounded-2xl bg-gradient-to-br from-brand-100 to-accent-100 blur-2xl opacity-60" />
-          <img
-            src={qr}
-            alt="QR Code de conexão do WhatsApp"
-            className="h-56 w-56 rounded-xl border border-slate-200 bg-white p-2 shadow-card-lg"
+          <div
+            aria-hidden
+            className="absolute inset-0 -z-10 rounded-2xl bg-gradient-to-br from-brand-200/60 to-accent-200/50 blur-2xl"
           />
+          <div className="rounded-2xl bg-white p-3 shadow-card-lg ring-1 ring-slate-200">
+            <img
+              src={qr}
+              alt="QR Code de conexão do WhatsApp"
+              className="h-52 w-52 rounded-lg"
+            />
+          </div>
         </div>
+
+        {/* Instructions */}
         <div>
-          <div className="mb-1 inline-flex items-center gap-1.5 rounded-full bg-brand-50 px-2.5 py-1 text-[11px] font-semibold text-brand-700 ring-1 ring-brand-200">
+          <span className="inline-flex items-center gap-1.5 rounded-full bg-brand-50 px-2.5 py-1 text-2xs font-bold uppercase tracking-wider text-brand-700 ring-1 ring-brand-200">
             <QrCode className="h-3 w-3" />
             Pareamento pendente
-          </div>
-          <h3 className="font-heading text-lg font-bold tracking-tight text-slate-900">
-            Conecte o WhatsApp em 3 passos
+          </span>
+          <h3 className="mt-3 font-heading text-2xl font-bold tracking-tight text-slate-900">
+            Conecte o WhatsApp
           </h3>
-          <ol className="mt-3 space-y-2.5 text-sm text-slate-600">
-            <li className="flex items-start gap-2.5">
-              <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-brand-100 text-[11px] font-bold text-brand-700">
-                1
-              </span>
-              <span>
+          <p className="mt-1 text-sm text-slate-600">
+            Use o leitor de QR de dentro do app, não a câmera padrão.
+          </p>
+
+          <ol className="mt-4 space-y-2.5">
+            {[
+              <>
                 Abra o <strong>WhatsApp</strong> no celular
-              </span>
-            </li>
-            <li className="flex items-start gap-2.5">
-              <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-brand-100 text-[11px] font-bold text-brand-700">
-                2
-              </span>
-              <span>
+              </>,
+              <>
                 Vá em <strong>Aparelhos conectados</strong> →{" "}
                 <strong>Conectar um aparelho</strong>
-              </span>
-            </li>
-            <li className="flex items-start gap-2.5">
-              <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-brand-100 text-[11px] font-bold text-brand-700">
-                3
-              </span>
-              <span>Escaneie o QR ao lado pela câmera do WhatsApp</span>
-            </li>
+              </>,
+              <>Escaneie o QR ao lado pela câmera do WhatsApp</>,
+            ].map((step, i) => (
+              <li key={i} className="flex items-start gap-3 text-sm text-slate-700">
+                <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-brand-600 text-2xs font-bold text-white">
+                  {i + 1}
+                </span>
+                <span>{step}</span>
+              </li>
+            ))}
           </ol>
-          <div className="mt-4 flex flex-wrap items-center gap-3 text-[11px] text-slate-500">
+
+          <div className="mt-5 flex flex-wrap items-center gap-x-4 gap-y-2 text-2xs text-slate-500">
             <span className="inline-flex items-center gap-1">
               <ShieldCheck className="h-3.5 w-3.5 text-accent-600" />
               Sessão local, sem servidores externos
             </span>
             <span className="inline-flex items-center gap-1">
               <Smartphone className="h-3.5 w-3.5 text-slate-400" />
-              Funciona com WhatsApp pessoal ou Business
+              WhatsApp pessoal ou Business
             </span>
           </div>
         </div>
