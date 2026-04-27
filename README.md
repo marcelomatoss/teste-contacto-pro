@@ -47,14 +47,18 @@
 | Backend      | **Node.js 22 + TypeScript + Express + Socket.IO**     |
 | ORM/DB       | **Prisma + SQLite** (file-based, zero infra)          |
 | Frontend     | **React 18 + Vite + Tailwind CSS + lucide-react**     |
-| Realtime     | **Socket.IO** (server → client events)                |
+| Frontend prod| **nginx** servindo build estático (multi-stage)       |
+| Realtime     | **Socket.IO** (server → client events, rooms por workspace) |
 | Queue        | **BullMQ + Redis** (retries, idempotência, async)     |
+| Auth         | **JWT + bcrypt** (login, middleware, multi-tenant)    |
+| Multi-tenant | **Workspace** model com isolamento total             |
 | LLM          | **Anthropic Claude Sonnet 4.5** (chat + classificação)|
 | RAG          | **OpenAI text-embedding-3-small** + cosine similarity |
 | STT          | **OpenAI Whisper** (`whisper-1`)                      |
 | TTS          | **OpenAI** (`gpt-4o-mini-tts`)                        |
-| Tests        | **Vitest** (35 testes unitários)                      |
-| Container    | **Docker Compose** (backend + frontend + redis)       |
+| Métricas     | **Prometheus + Grafana** (dashboard auto-provisionado) |
+| Testes       | **Vitest** (41 unit) + **Playwright** (11 E2E)        |
+| Container    | **Docker Compose** (backend, frontend, redis, prometheus, grafana) |
 
 ---
 
@@ -106,10 +110,24 @@ npm run dev
 
 URLs:
 
-- Frontend: `http://localhost:5173`
-- Backend / API: `http://localhost:3001`
+- **Frontend** (produção, nginx): `http://localhost:5173`
+- **Backend / API**: `http://localhost:3001`
 - Healthcheck: `http://localhost:3001/health`
-- Status (WA + serviços): `http://localhost:3001/api/status`
+- **Métricas (Prometheus)**: `http://localhost:9090`
+- **Dashboard (Grafana)**: `http://localhost:3030` (login: `admin` / `admin`)
+- Status (WA + serviços): `http://localhost:3001/api/status` (precisa de JWT)
+- `/metrics` (raw Prometheus): `http://localhost:3001/metrics`
+
+### Login inicial
+
+Na primeira execução com banco vazio, o backend cria um workspace + admin
+com base no `.env`:
+
+- Email: `ADMIN_EMAIL` (default: `admin@contactpro.local`)
+- Senha: `ADMIN_PASSWORD` (default: `contactpro`)
+- Workspace: `DEFAULT_WORKSPACE_NAME`
+
+Login pelo frontend (`localhost:5173`) usa essas credenciais.
 
 ---
 
@@ -334,13 +352,15 @@ Mailing, Data Enrichment, Atendimento com IA, perguntas-chave, etc) — total de
 
 ## Testes automatizados
 
+### Unitários (backend) — 41 testes Vitest
+
 ```bash
 cd backend
 npm test                  # rodar uma vez
 npm run test:watch        # watch mode durante desenvolvimento
 ```
 
-**35 testes cobrindo:**
+Cobre:
 - `decideStatusAndReaction` — todas as transições de status (9 casos)
 - `classifyIntent` — 9 categorias + fallbacks (4 casos)
 - `qualifyLead` — extração com mock do LLM (3 casos)
@@ -348,9 +368,67 @@ npm run test:watch        # watch mode durante desenvolvimento
 - `cosineSimilarity` — propriedades matemáticas + ranking (5 casos)
 - `hashChunks` — estabilidade e detecção de mudança (2 casos)
 - `extractTextContent` / `isAudioMessage` — formatos do WhatsApp (8 casos)
+- `jwt + bcrypt` — sign/verify, hash/compare, salt randomness (6 casos)
 
-LLMs externos são **mockados** (`vi.mock`), então os testes rodam offline em
-~2s sem custar tokens.
+LLMs externos são **mockados** (`vi.mock`), então rodam offline em ~2s sem
+custar tokens.
+
+### E2E (frontend) — 11 testes Playwright
+
+```bash
+cd frontend
+npm run e2e:install       # primeira vez: baixa o Chromium (~150MB)
+npm run e2e               # roda todos os testes
+npm run e2e:headed        # com navegador visível pra debug
+```
+
+Cobre os fluxos críticos da UI com **backend mockado** via `page.route`
+(não precisa de SQLite/Redis/Anthropic rodando):
+
+**Auth (5)**: login screen renderiza, credenciais erradas mostram alerta,
+login bem-sucedido leva à inbox, sessão persiste em reload, logout volta
+à tela de login.
+
+**Inbox (6)**: layout 3-painéis aparece, primeira conversa é auto-selecionada
+com suas mensagens, lead panel reflete dados extraídos pela IA + intent,
+indicadores de serviço (LLM/STT/TTS/QUEUE) aparecem como ativos, badges de
+status na lista, busca filtra conversas.
+
+## Observabilidade (Prometheus + Grafana)
+
+Acesse:
+- **Grafana**: http://localhost:3030 (anonymous viewer ativado, login admin/admin)
+- **Prometheus**: http://localhost:9090
+- **Métricas raw**: http://localhost:3001/metrics
+
+Dashboard auto-provisionado **"Contact Pro Bot — Overview"** com 8 painéis:
+
+- Mensagens recebidas (5min)
+- Mensagens enviadas (5min)
+- Jobs em processamento (queue depth)
+- Falhas de IA (5min)
+- Latência da IA (p95) por operação
+- Distribuição de intents
+- HTTP duration (p95) por rota
+- Lead status transitions (rate)
+
+Métricas customizadas expostas pelo backend:
+`http_request_duration_seconds`, `wa_messages_total`, `wa_reactions_total`,
+`ai_call_duration_seconds`, `ai_call_errors_total`, `ai_intent_total`,
+`lead_status_transition_total`, `queue_jobs_total`, `queue_jobs_in_flight`.
+
+## Auth + Multi-tenant
+
+- **JWT + bcrypt**: login via email/senha, token TTL configurável
+  (default 72h)
+- **Workspace** isolado: cada tenant tem seu próprio número WhatsApp,
+  sessão Baileys, conversas, leads e mensagens
+- **Per-workspace Socket.IO rooms**: emits do servidor não vazam entre
+  tenants
+- **JobId per-workspace**: `${workspaceId}_${jid}_${messageId}` —
+  idempotência sem colisão cross-tenant
+- **Seed automático**: na primeira execução com banco vazio, cria um
+  workspace default + admin com base no `.env`
 
 ---
 

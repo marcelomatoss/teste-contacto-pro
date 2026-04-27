@@ -11,8 +11,14 @@ const authHeaders = (): Record<string, string> => {
 
 const handle = async <T>(res: Response): Promise<T> => {
   if (res.status === 401) {
-    clearAuth();
-    throw new Error("Sessão expirada. Faça login novamente.");
+    // Distinguish "session expired" (had a token, server rejected it) from
+    // "wrong credentials" (no token; the user is trying to log in).
+    if (getStoredToken()) {
+      clearAuth();
+      throw new Error("Sessão expirada. Faça login novamente.");
+    }
+    const body = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(body.error || "Não autorizado");
   }
   if (!res.ok) {
     const text = await res.text();
@@ -54,6 +60,7 @@ export const api = {
   // Media has to embed token in the URL because <audio> tags can't set headers
   mediaUrl: (messageId: string) => {
     const token = getStoredToken();
-    return `${API_URL}/api/media/${messageId}${token ? `?token=${encodeURIComponent(token)}` : ""}`;
+    const query = token ? "?token=" + encodeURIComponent(token) : "";
+    return `${API_URL}/api/media/${messageId}${query}`;
   },
 };
