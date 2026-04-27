@@ -48,10 +48,13 @@
 | ORM/DB       | **Prisma + SQLite** (file-based, zero infra)          |
 | Frontend     | **React 18 + Vite + Tailwind CSS + lucide-react**     |
 | Realtime     | **Socket.IO** (server → client events)                |
+| Queue        | **BullMQ + Redis** (retries, idempotência, async)     |
 | LLM          | **Anthropic Claude Sonnet 4.5** (chat + classificação)|
+| RAG          | **OpenAI text-embedding-3-small** + cosine similarity |
 | STT          | **OpenAI Whisper** (`whisper-1`)                      |
 | TTS          | **OpenAI** (`gpt-4o-mini-tts`)                        |
-| Container    | **Docker Compose** (backend + frontend + volumes)     |
+| Tests        | **Vitest** (35 testes unitários)                      |
+| Container    | **Docker Compose** (backend + frontend + redis)       |
 
 ---
 
@@ -290,13 +293,64 @@ Message      { id, conversationId, direction, type, content, mediaPath, transcri
 | Decisão                                | Alternativa rejeitada       | Por quê                                                        |
 | -------------------------------------- | --------------------------- | -------------------------------------------------------------- |
 | **SQLite + Prisma**                    | Postgres                    | Zero infra, atende o desafio, file-based em volume Docker      |
-| **Sem fila externa**                   | BullMQ + Redis              | Em 6h, fila adicionaria infra sem ganho perceptível na demo    |
-| **KB estática no prompt**              | RAG vetorial                | Base é pequena (~5 serviços, ~600 tokens), RAG não justifica   |
+| **BullMQ + Redis para fila**           | Processamento síncrono      | Permite retries com backoff, idempotência via jobId, escala    |
+| **RAG com embeddings + in-memory**     | RAG vetorial em DB / só KB  | KB pequena (~8 chunks), embeddings cacheados em disco, simples |
 | **TTS+STT no mesmo provider (OpenAI)** | Whisper local + ElevenLabs  | Menos chaves, menos código, latência ok                        |
 | **Vite dev server em produção**        | Build estático + nginx      | Para o desafio basta — README documenta o atalho               |
-| **Sem testes automatizados**           | Vitest / supertest          | Tempo finito; validei manualmente, documento como gap          |
+| **Vitest para testes unitários**       | Jest                        | TS-first, sem config-hell, integra com vite                    |
 | **Sem auth no frontend**               | Login + sessão              | Demo single-user, não há requisito de multi-tenant             |
 | **Inbox read-only**                    | Caixa permitindo digitação  | Foco do desafio é o **bot autônomo**; humano não digita aqui   |
+
+## Fila de processamento (BullMQ + Redis)
+
+Mensagens inbound do WhatsApp **não bloqueiam** o handler do Baileys — são
+enfileiradas e processadas por um worker dedicado.
+
+- **Idempotência**: o `jobId` é `${jid}_${whatsappMessageId}`. Re-entregas do
+  Baileys (reconexão, sync de offline) são silenciosamente deduplicadas.
+- **Retries**: 4 tentativas com backoff exponencial (800ms, 1.6s, 3.2s, 6.4s).
+  Falhas em LLM, STT, TTS ou envio são reintentadas automaticamente.
+- **Concorrência**: worker processa até 4 mensagens em paralelo.
+- **Degraded mode**: se Redis estiver indisponível, o pipeline volta a rodar
+  inline (sem fila) — o sistema nunca trava por falta de Redis.
+- **Observabilidade**: cada job loga `jobId`, tentativa, duração e falhas.
+
+## RAG (Retrieval-Augmented Generation)
+
+A knowledge base é fragmentada em **chunks por seção** (Contact Z, Contact Tel,
+Mailing, Data Enrichment, Atendimento com IA, perguntas-chave, etc) — total de
+8 chunks na KB atual.
+
+- **Embeddings**: OpenAI `text-embedding-3-small` (1536 dimensões)
+- **Cache**: embeddings persistidos em `./data/rag-cache.json`, chaveado por
+  hash SHA-256 do conteúdo dos chunks. Só re-embeda quando a KB muda.
+- **Retrieval**: a cada turno, embeda a última mensagem do lead e seleciona os
+  **top-3 chunks** por cosine similarity. Só esses são injetados no system
+  prompt — economiza tokens e mantém o foco.
+- **Fallback**: se OpenAI estiver indisponível ou sem chave, cai para a KB
+  inteira (modo legado), sem quebrar o fluxo.
+- **Modo de teste**: a função `deterministicEmbedding` permite testar a
+  pipeline RAG sem chamar OpenAI.
+
+## Testes automatizados
+
+```bash
+cd backend
+npm test                  # rodar uma vez
+npm run test:watch        # watch mode durante desenvolvimento
+```
+
+**35 testes cobrindo:**
+- `decideStatusAndReaction` — todas as transições de status (9 casos)
+- `classifyIntent` — 9 categorias + fallbacks (4 casos)
+- `qualifyLead` — extração com mock do LLM (3 casos)
+- `chunkKnowledgeBase` — split, IDs estáveis, filtros (4 casos)
+- `cosineSimilarity` — propriedades matemáticas + ranking (5 casos)
+- `hashChunks` — estabilidade e detecção de mudança (2 casos)
+- `extractTextContent` / `isAudioMessage` — formatos do WhatsApp (8 casos)
+
+LLMs externos são **mockados** (`vi.mock`), então os testes rodam offline em
+~2s sem custar tokens.
 
 ---
 
@@ -426,30 +480,43 @@ Distribuição:
 
 ### O que ficou completo
 
+#### Prioridade 1 (obrigatório)
 ✅ Conexão WhatsApp via **Baileys** com QR no terminal **e** na UI
 ✅ Reconexão automática (exceto quando logged-out)
 ✅ Recebimento de **texto**
 ✅ Envio de texto **como reply** à mensagem original
 ✅ **Reaction** 👍 / ✅ / 👌 / ⚠️ na mensagem inbound
-✅ **IA real** (Claude Sonnet 4.5) gerando resposta com KB injetada
+✅ **IA real** (Claude Sonnet 4.5) gerando resposta
+✅ **Frontend React + Tailwind** com 3-painéis (lista, chat, painel do lead)
+✅ **Socket.IO** com 9 eventos cobrindo todo o pipeline
+✅ **Persistência completa** (SQLite via Prisma) — recarregar mantém tudo
+✅ **Docker Compose** subindo backend + frontend + redis com volumes
+✅ **README completo** com AI Usage Report
+✅ **Histórico de commits** progressivos (16+)
+
+#### Prioridade 2 (alta pontuação)
+✅ **Áudio inbound**: download + STT (Whisper) com transcrição exibida
+✅ **Áudio outbound**: TTS (OpenAI) quando inbound foi áudio (regra mínima)
 ✅ **Classificação de intent** em 9 categorias
 ✅ **Qualificação de lead** (nome, empresa, interesse, objetivo, volume)
 ✅ **Mudança automática de status** (qualified / needs_human / opt_out)
-✅ **Frontend React + Tailwind** com 3-painéis (lista, chat, painel do lead)
-✅ **Socket.IO** com 9 eventos cobrindo todo o pipeline
 ✅ Indicador "**IA pensando…**"
 ✅ Distinção visual clara user vs bot, texto vs áudio
-✅ **Persistência completa** (SQLite via Prisma) — recarregar mantém tudo
-✅ **Áudio inbound**: download + STT (Whisper) com transcrição exibida
-✅ **Áudio outbound**: TTS (OpenAI) quando inbound foi áudio (regra mínima)
-✅ **Docker Compose** subindo backend + frontend com volumes persistentes
-✅ **README completo** com AI Usage Report
+✅ Painel do lead com dados extraídos pela IA, intent + status
 
-### O que ficou incompleto (documentado acima)
+#### Prioridade 3 (diferencial)
+✅ **Fila assíncrona** (BullMQ + Redis)
+✅ **Retries** (4 tentativas com backoff exponencial)
+✅ **Idempotência** (jobId = jid + whatsappMessageId)
+✅ **RAG real** (embeddings OpenAI + cosine similarity + cache em disco)
+✅ **35 testes automatizados** (Vitest, com LLM mockado)
+✅ **Multi-conversa** com agrupamento por status
+✅ **UI organizada** seguindo design system UI/UX Pro Max
 
-- Testes automatizados
-- Fila assíncrona (BullMQ)
-- Multi-tenant
-- Auth no frontend
-- Métricas / observabilidade detalhada
-- Build estático do frontend + nginx
+### O que ficou incompleto (não-críticos)
+
+- **Multi-tenant** (cada workspace com seu número WhatsApp + KB)
+- **Auth no frontend** (demo single-user, sem requisito)
+- **Build estático do frontend + nginx** (Vite dev em prod basta para o desafio)
+- **Métricas Prometheus** (logs estruturados existem, dashboard não)
+- **Testes E2E com Playwright** (testes unitários cobrem a lógica determinística)
