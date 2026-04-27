@@ -21,8 +21,11 @@ const handle = async <T>(res: Response): Promise<T> => {
     throw new Error(body.error || "Não autorizado");
   }
   if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`API ${res.status}: ${text}`);
+    // Surface the server's error field when present so callers can show a
+    // friendly message instead of "API 409: {...json...}".
+    const body = (await res.json().catch(() => null)) as { error?: string } | null;
+    if (body?.error) throw new Error(body.error);
+    throw new Error(`API ${res.status}`);
   }
   return res.json() as Promise<T>;
 };
@@ -37,12 +40,28 @@ const post = <T>(path: string, body?: unknown): Promise<T> =>
     body: body ? JSON.stringify(body) : undefined,
   }).then(handle<T>);
 
+export interface InvitePayload {
+  email: string;
+  password: string;
+  name?: string;
+  workspaceSlug: string;
+}
+
+export interface InvitedUser {
+  id: string;
+  email: string;
+  name: string | null;
+  role: string;
+}
+
 export const api = {
   base: API_URL,
   // Auth
   login: (email: string, password: string) =>
     post<{ token: string; user: AuthUser }>("/api/auth/login", { email, password }),
   me: () => get<AuthUser>("/api/auth/me"),
+  registerUser: (payload: InvitePayload) =>
+    post<{ user: InvitedUser }>("/api/auth/register", payload),
 
   // App
   status: () =>

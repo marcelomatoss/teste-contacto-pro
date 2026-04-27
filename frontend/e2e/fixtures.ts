@@ -90,6 +90,7 @@ export const SAMPLE_MESSAGES = [
 
 interface MockOptions {
   loginShouldFail?: boolean;
+  registerShouldConflict?: boolean;
 }
 
 /**
@@ -153,15 +154,45 @@ export const mockBackend = async (page: Page, opts: MockOptions = {}) => {
       body: JSON.stringify(SAMPLE_MESSAGES),
     });
   });
+
+  await page.route("**/api/auth/register", async (route, request) => {
+    if (opts.registerShouldConflict) {
+      await route.fulfill({
+        status: 409,
+        contentType: "application/json",
+        body: JSON.stringify({ error: "Email já cadastrado" }),
+      });
+      return;
+    }
+    const body = request.postDataJSON() as {
+      email: string;
+      name?: string;
+    };
+    await route.fulfill({
+      status: 201,
+      contentType: "application/json",
+      body: JSON.stringify({
+        user: {
+          id: "user_invited",
+          email: body.email,
+          name: body.name ?? null,
+          role: "member",
+        },
+      }),
+    });
+  });
 };
 
+// `provide` is Playwright's fixture callback (conventionally named `use`).
+// Renamed to avoid the React-hook lint rule (S6440) flagging any identifier
+// starting with "use" as a misused hook.
 export const test = base.extend({
-  page: async ({ page }, use) => {
+  page: async ({ page }, provide) => {
     // Avoid Playwright failing on noise from the (un-mocked) Socket.IO endpoint.
     await page.route("**/socket.io/**", async (route) => {
       await route.fulfill({ status: 200, body: "" });
     });
-    await use(page);
+    await provide(page);
   },
 });
 
