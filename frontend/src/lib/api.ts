@@ -14,7 +14,7 @@ export const api = {
   base: API_URL,
   status: () => fetch(`${API_URL}/api/status`).then(handle<{
     whatsapp: { status: string; qr?: string | null };
-    services: { ai: boolean; stt: boolean; tts: boolean };
+    services: { ai: boolean; stt: boolean; tts: boolean; queue: boolean };
   }>),
   listConversations: () => fetch(`${API_URL}/api/conversations`).then(handle<Conversation[]>),
   getConversation: (id: string) =>

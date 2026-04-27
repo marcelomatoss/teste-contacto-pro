@@ -1,4 +1,4 @@
-import { Brain, ChevronRight, Mic, Volume2 } from "lucide-react";
+import { Brain, ChevronRight, Layers, Mic, Volume2 } from "lucide-react";
 import clsx from "clsx";
 import { ConnectionPill } from "./ConnectionStatus";
 import BrandMark from "./BrandMark";
@@ -6,7 +6,7 @@ import type { ConnectionStatus } from "../lib/types";
 
 interface Props {
   status: ConnectionStatus;
-  services: { ai: boolean; stt: boolean; tts: boolean };
+  services: { ai: boolean; stt: boolean; tts: boolean; queue: boolean };
 }
 
 const ServicePill = ({
@@ -69,6 +69,7 @@ export const TopBar = ({ status, services }: Props) => {
           <ServicePill enabled={services.ai} label="LLM" icon={Brain} />
           <ServicePill enabled={services.stt} label="STT" icon={Mic} />
           <ServicePill enabled={services.tts} label="TTS" icon={Volume2} />
+          <ServicePill enabled={services.queue} label="QUEUE" icon={Layers} />
         </div>
         <div className="ml-1">
           <ConnectionPill status={status} />

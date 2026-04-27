@@ -5,7 +5,7 @@ import type { Conversation, ConnectionStatus, Lead, Message } from "../lib/types
 
 export interface RealtimeState {
   whatsapp: { status: ConnectionStatus; qr?: string | null };
-  services: { ai: boolean; stt: boolean; tts: boolean };
+  services: { ai: boolean; stt: boolean; tts: boolean; queue: boolean };
   conversations: Conversation[];
   messagesByConv: Record<string, Message[]>;
   thinking: Record<string, boolean>;
@@ -23,6 +23,7 @@ export const useRealtime = () => {
     ai: false,
     stt: false,
     tts: false,
+    queue: false,
   });
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [messagesByConv, setMessagesByConv] = useState<Record<string, Message[]>>({});
