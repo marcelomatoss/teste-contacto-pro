@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { AlertTriangle, Loader2, LogOut, X } from "lucide-react";
 import clsx from "clsx";
 import { api } from "../lib/api";
@@ -16,14 +17,19 @@ export const LogoutButton = ({ status }: Props) => {
 
   const canDisconnect = status === "connected" || status === "qr";
 
-  // Close on escape
+  // Close on escape + lock body scroll while modal is open
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape" && !loading) setOpen(false);
     };
     document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.body.style.overflow = previousOverflow;
+    };
   }, [open, loading]);
 
   const confirm = async () => {
@@ -43,28 +49,22 @@ export const LogoutButton = ({ status }: Props) => {
 
   if (!canDisconnect) return null;
 
-  return (
-    <>
-      <button
-        onClick={() => setOpen(true)}
-        className="press ring-focus group flex h-7 w-7 items-center justify-center rounded-full bg-white/0 text-slate-400 transition-colors duration-base hover:bg-rose-50 hover:text-rose-600"
-        title="Desconectar WhatsApp"
-        aria-label="Desconectar WhatsApp"
-      >
-        <LogOut className="h-3.5 w-3.5" aria-hidden />
-      </button>
-
-      {open && (
+  // The dialog is rendered via Portal directly into <body> so it escapes any
+  // ancestor with `backdrop-filter` / `transform` (which would otherwise
+  // create a containing block and trap our `position: fixed` modal inside
+  // the TopBar). This also ensures the scrim blur covers the whole viewport.
+  const dialog = open
+    ? createPortal(
         <div
           role="dialog"
           aria-modal="true"
           aria-labelledby="logout-title"
           className="fixed inset-0 z-modal flex items-center justify-center px-4 animate-fade-in"
         >
-          {/* Scrim */}
+          {/* Scrim — full-viewport blur + dim */}
           <button
             type="button"
-            className="absolute inset-0 bg-slate-900/45 backdrop-blur-sm"
+            className="absolute inset-0 bg-slate-900/55 backdrop-blur-md"
             onClick={() => !loading && setOpen(false)}
             aria-label="Fechar"
             tabIndex={-1}
@@ -132,8 +132,22 @@ export const LogoutButton = ({ status }: Props) => {
               </button>
             </div>
           </div>
-        </div>
-      )}
+        </div>,
+        document.body,
+      )
+    : null;
+
+  return (
+    <>
+      <button
+        onClick={() => setOpen(true)}
+        className="press ring-focus group flex h-7 w-7 items-center justify-center rounded-full bg-white/0 text-slate-400 transition-colors duration-base hover:bg-rose-50 hover:text-rose-600"
+        title="Desconectar WhatsApp"
+        aria-label="Desconectar WhatsApp"
+      >
+        <LogOut className="h-3.5 w-3.5" aria-hidden />
+      </button>
+      {dialog}
     </>
   );
 };
