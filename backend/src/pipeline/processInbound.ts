@@ -30,6 +30,8 @@ import {
 
 const HISTORY_LIMIT = 20;
 
+// ─── Helpers (kept small + pure where possible for readability) ─────────
+
 const buildChatHistory = async (conversationId: string): Promise<ChatMessage[]> => {
   const msgs = await prisma.message.findMany({
     where: {
@@ -49,15 +51,19 @@ const buildChatHistory = async (conversationId: string): Promise<ChatMessage[]> 
     .filter((m) => m.content.length > 0);
 };
 
-const findOrCreateConversation = async (jid: string, contactName: string | null) => {
+const findOrCreateConversation = async (
+  workspaceId: string,
+  jid: string,
+  contactName: string | null,
+) => {
   let conv = await prisma.conversation.findUnique({
-    where: { whatsappJid: jid },
+    where: { workspaceId_whatsappJid: { workspaceId, whatsappJid: jid } },
     include: { lead: true },
   });
-
   if (!conv) {
     conv = await prisma.conversation.create({
       data: {
+        workspaceId,
         whatsappJid: jid,
         contactName: contactName ?? null,
         lead: { create: { phone: jid.split("@")[0] || null } },
@@ -71,35 +77,26 @@ const findOrCreateConversation = async (jid: string, contactName: string | null)
       include: { lead: true },
     });
   }
-
   return conv;
 };
 
+interface IngestResult {
+  inboundMessage: Awaited<ReturnType<typeof prisma.message.create>>;
+  userText: string | null;
+}
+
 /**
- * The actual inbound message pipeline. Idempotency is enforced upstream by
- * the queue (jobId = jid + whatsappMessageId), so this function may safely
- * assume it runs at most once per inbound message — but it is also resilient
- * to partial failures (each step is independently emitted/persisted).
- *
- * BullMQ retries this whole function on failure with exponential backoff, so
- * any throw will be retried up to 4 times.
+ * Persist the inbound message and, when it's audio, download + transcribe.
+ * Emits realtime events as each stage completes.
  */
-export const processInbound = async (msg: proto.IWebMessageInfo): Promise<void> => {
-  const jid = msg.key.remoteJid;
-  if (!jid) return;
-  if (jid.endsWith("@g.us")) return;
-
-  const contactName = msg.pushName || null;
-  const conv = await findOrCreateConversation(jid, contactName);
-  const audio = isAudioMessage(msg);
-  const text = extractTextContent(msg);
-
-  if (!audio && !text) {
-    logger.debug({ key: msg.key }, "ignoring non-text/audio message");
-    return;
-  }
-
-  // 1. Persist inbound + emit
+const ingestInbound = async (
+  workspaceId: string,
+  msg: proto.IWebMessageInfo,
+  conv: Awaited<ReturnType<typeof findOrCreateConversation>>,
+  audio: boolean,
+  text: string | null,
+  jid: string,
+): Promise<IngestResult> => {
   let inboundMessage = await prisma.message.create({
     data: {
       conversationId: conv.id,
@@ -110,60 +107,234 @@ export const processInbound = async (msg: proto.IWebMessageInfo): Promise<void> 
       status: "delivered",
     },
   });
-
   waMessages.inc({ direction: "inbound", type: audio ? "audio" : "text" });
-  emit("wa.message.received", { message: inboundMessage, conversation: conv });
+  emit("wa.message.received", { message: inboundMessage, conversation: conv }, workspaceId);
 
-  // 2. Audio → download + transcribe
-  if (audio) {
-    try {
-      const downloaded = await downloadAudioMessage(msg);
-      if (downloaded) {
-        inboundMessage = await prisma.message.update({
-          where: { id: inboundMessage.id },
-          data: { mediaPath: downloaded.filePath },
-        });
-        emit("wa.message.received", { message: inboundMessage, conversation: conv });
-
-        const transcription = await transcribeAudio(downloaded.filePath);
-        inboundMessage = await prisma.message.update({
-          where: { id: inboundMessage.id },
-          data: { transcription },
-        });
-        emit("audio.transcribed", { messageId: inboundMessage.id, transcription });
-      }
-    } catch (err) {
-      logger.error({ err }, "audio download/transcribe failed");
-      try {
-        await reactToMessage(jid, msg.key, "⚠️");
-      } catch {
-        /* noop */
-      }
-    }
+  if (!audio) {
+    return { inboundMessage, userText: inboundMessage.content };
   }
 
-  const userText = audio ? inboundMessage.transcription : inboundMessage.content;
+  try {
+    const downloaded = await downloadAudioMessage(msg);
+    if (!downloaded) return { inboundMessage, userText: null };
 
+    inboundMessage = await prisma.message.update({
+      where: { id: inboundMessage.id },
+      data: { mediaPath: downloaded.filePath },
+    });
+    emit("wa.message.received", { message: inboundMessage, conversation: conv }, workspaceId);
+
+    const transcription = await transcribeAudio(downloaded.filePath);
+    inboundMessage = await prisma.message.update({
+      where: { id: inboundMessage.id },
+      data: { transcription },
+    });
+    emit("audio.transcribed", { messageId: inboundMessage.id, transcription }, workspaceId);
+    return { inboundMessage, userText: transcription };
+  } catch (err) {
+    logger.error({ err, workspaceId }, "audio download/transcribe failed");
+    try {
+      await reactToMessage(workspaceId, jid, msg.key, "⚠️");
+    } catch {
+      /* noop */
+    }
+    return { inboundMessage, userText: null };
+  }
+};
+
+const applyInitialReaction = async (
+  workspaceId: string,
+  jid: string,
+  msg: proto.IWebMessageInfo,
+  inboundMessageId: string,
+) => {
+  try {
+    await reactToMessage(workspaceId, jid, msg.key, "👍");
+    await prisma.message.update({
+      where: { id: inboundMessageId },
+      data: { reaction: "👍" },
+    });
+    waReactions.inc({ emoji: "👍" });
+    emit("wa.reaction.sent", { messageId: inboundMessageId, emoji: "👍" }, workspaceId);
+  } catch (err) {
+    logger.warn({ err }, "initial reaction failed (continuing)");
+  }
+};
+
+const applyFinalReaction = async (
+  workspaceId: string,
+  jid: string,
+  msg: proto.IWebMessageInfo,
+  inboundMessageId: string,
+  reaction: "👍" | "✅" | "👌" | "⚠️",
+) => {
+  if (reaction === "👍") return;
+  try {
+    await reactToMessage(workspaceId, jid, msg.key, reaction);
+    await prisma.message.update({
+      where: { id: inboundMessageId },
+      data: { reaction },
+    });
+    waReactions.inc({ emoji: reaction });
+    emit("wa.reaction.sent", { messageId: inboundMessageId, emoji: reaction }, workspaceId);
+  } catch (err) {
+    logger.warn({ err }, "final reaction failed");
+  }
+};
+
+const persistDecision = async (
+  workspaceId: string,
+  conv: Awaited<ReturnType<typeof findOrCreateConversation>>,
+  intent: string,
+  decision: ReturnType<typeof decideStatusAndReaction>,
+  qualifyResult: Awaited<ReturnType<typeof qualifyLead>>,
+) => {
+  const previousStatus = conv.lead?.status || "new";
+  if (conv.lead && previousStatus !== decision.leadStatus) {
+    leadStatusTransition.inc({ from: previousStatus, to: decision.leadStatus });
+  }
+
+  await prisma.conversation.update({
+    where: { id: conv.id },
+    data: { intent, status: decision.conversationStatus },
+  });
+
+  if (conv.lead) {
+    await prisma.lead.update({
+      where: { id: conv.lead.id },
+      data: {
+        name: qualifyResult?.name ?? conv.lead.name,
+        company: qualifyResult?.company ?? conv.lead.company,
+        phone: qualifyResult?.phone ?? conv.lead.phone,
+        serviceInterest:
+          qualifyResult?.serviceInterest && qualifyResult.serviceInterest !== "unknown"
+            ? qualifyResult.serviceInterest
+            : conv.lead.serviceInterest,
+        leadGoal: qualifyResult?.leadGoal ?? conv.lead.leadGoal,
+        estimatedVolume: qualifyResult?.estimatedVolume ?? conv.lead.estimatedVolume,
+        status: decision.leadStatus,
+      },
+    });
+  }
+
+  const refreshed = await prisma.conversation.findUnique({
+    where: { id: conv.id },
+    include: { lead: true },
+  });
+  emit("lead.updated", { conversation: refreshed, lead: refreshed?.lead }, workspaceId);
+  emit(
+    "conversation.status_changed",
+    { conversationId: conv.id, status: decision.conversationStatus },
+    workspaceId,
+  );
+  return refreshed;
+};
+
+const sendBotReply = async (
+  workspaceId: string,
+  jid: string,
+  msg: proto.IWebMessageInfo,
+  conversationId: string,
+  replyText: string,
+  inboundWasAudio: boolean,
+) => {
+  let outbound = await prisma.message.create({
+    data: {
+      conversationId,
+      direction: "outbound",
+      type: inboundWasAudio ? "audio" : "text",
+      content: replyText,
+      status: "pending",
+    },
+  });
+
+  if (inboundWasAudio) {
+    const tts = await synthesizeSpeech(
+      replyText,
+      path.resolve(env.MEDIA_PATH),
+      `out_${outbound.id}`,
+    );
+    if (tts) {
+      const buffer = await fs.readFile(tts.filePath);
+      const sent = await sendAudio(workspaceId, jid, buffer, msg);
+      outbound = await prisma.message.update({
+        where: { id: outbound.id },
+        data: {
+          mediaPath: tts.filePath,
+          status: "sent",
+          whatsappId: sent?.key?.id || null,
+        },
+      });
+    } else {
+      // No TTS configured — degrade to text
+      const sent = await sendText(workspaceId, jid, replyText, msg);
+      outbound = await prisma.message.update({
+        where: { id: outbound.id },
+        data: {
+          type: "text",
+          status: "sent",
+          whatsappId: sent?.key?.id || null,
+        },
+      });
+    }
+  } else {
+    const sent = await sendText(workspaceId, jid, replyText, msg);
+    outbound = await prisma.message.update({
+      where: { id: outbound.id },
+      data: {
+        status: "sent",
+        whatsappId: sent?.key?.id || null,
+      },
+    });
+  }
+
+  waMessages.inc({ direction: "outbound", type: outbound.type });
+  emit("wa.message.sent", { message: outbound }, workspaceId);
+  return outbound;
+};
+
+// ─── Main pipeline ──────────────────────────────────────────────────────
+
+/**
+ * Inbound message pipeline. Workspace-scoped end-to-end. BullMQ retries this
+ * whole function on failure with exponential backoff, so any throw will be
+ * retried up to 4 times.
+ */
+export const processInbound = async (
+  workspaceId: string,
+  msg: proto.IWebMessageInfo,
+): Promise<void> => {
+  const jid = msg.key.remoteJid;
+  if (!jid || jid.endsWith("@g.us")) return;
+
+  const audio = isAudioMessage(msg);
+  const text = extractTextContent(msg);
+  if (!audio && !text) {
+    logger.debug({ key: msg.key }, "ignoring non-text/audio message");
+    return;
+  }
+
+  const conv = await findOrCreateConversation(workspaceId, jid, msg.pushName ?? null);
+
+  // 1-2. Ingest + (if audio) transcribe
+  const { inboundMessage, userText } = await ingestInbound(
+    workspaceId,
+    msg,
+    conv,
+    audio,
+    text,
+    jid,
+  );
   if (!userText) {
-    logger.warn({ msgId: inboundMessage.id }, "no usable user text after intake");
+    logger.warn({ msgId: inboundMessage.id, workspaceId }, "no usable user text after intake");
     return;
   }
 
   // 3. Quick first reaction
-  try {
-    await reactToMessage(jid, msg.key, "👍");
-    await prisma.message.update({
-      where: { id: inboundMessage.id },
-      data: { reaction: "👍" },
-    });
-    waReactions.inc({ emoji: "👍" });
-    emit("wa.reaction.sent", { messageId: inboundMessage.id, emoji: "👍" });
-  } catch (err) {
-    logger.warn({ err }, "initial reaction failed (continuing)");
-  }
+  await applyInitialReaction(workspaceId, jid, msg, inboundMessage.id);
 
   // 4. AI thinking on
-  emit("ai.thinking", { conversationId: conv.id, on: true });
+  emit("ai.thinking", { conversationId: conv.id, on: true }, workspaceId);
 
   try {
     const history = await buildChatHistory(conv.id);
@@ -184,146 +355,44 @@ export const processInbound = async (msg: proto.IWebMessageInfo): Promise<void> 
       classifyIntent(history, userText),
       qualifyLead(history, userText, leadSnapshot),
     ]);
-
     intentClassified.inc({ intent });
 
-    // 6. Decide status / reaction (pure function, see decideStatus.ts)
-    const previousStatus = lead?.status || "new";
-    const decision = decideStatusAndReaction(intent, previousStatus);
-    if (lead && previousStatus !== decision.leadStatus) {
-      leadStatusTransition.inc({ from: previousStatus, to: decision.leadStatus });
-    }
+    // 6-7. Status decision + persist
+    const decision = decideStatusAndReaction(intent, lead?.status || "new");
+    const refreshed = await persistDecision(workspaceId, conv, intent, decision, qualifyResult);
 
-    // 7. Persist intent + lead update
-    await prisma.conversation.update({
-      where: { id: conv.id },
-      data: { intent, status: decision.conversationStatus },
-      include: { lead: true },
-    });
-
-    if (lead) {
-      await prisma.lead.update({
-        where: { id: lead.id },
-        data: {
-          name: qualifyResult?.name ?? lead.name,
-          company: qualifyResult?.company ?? lead.company,
-          phone: qualifyResult?.phone ?? lead.phone,
-          serviceInterest:
-            qualifyResult?.serviceInterest && qualifyResult.serviceInterest !== "unknown"
-              ? qualifyResult.serviceInterest
-              : lead.serviceInterest,
-          leadGoal: qualifyResult?.leadGoal ?? lead.leadGoal,
-          estimatedVolume: qualifyResult?.estimatedVolume ?? lead.estimatedVolume,
-          status: decision.leadStatus,
-        },
-      });
-    }
-
-    const refreshedConv = await prisma.conversation.findUnique({
-      where: { id: conv.id },
-      include: { lead: true },
-    });
-
-    emit("lead.updated", { conversation: refreshedConv, lead: refreshedConv?.lead });
-    emit("conversation.status_changed", {
-      conversationId: conv.id,
-      status: decision.conversationStatus,
-    });
-
-    // 8. Generate reply text (RAG inside)
+    // 8. Generate reply
     const replyText = await generateReply(history, {
-      name: refreshedConv?.lead?.name ?? null,
-      company: refreshedConv?.lead?.company ?? null,
-      phone: refreshedConv?.lead?.phone ?? null,
-      serviceInterest: refreshedConv?.lead?.serviceInterest ?? null,
-      leadGoal: refreshedConv?.lead?.leadGoal ?? null,
-      estimatedVolume: refreshedConv?.lead?.estimatedVolume ?? null,
-      status: refreshedConv?.lead?.status ?? null,
+      name: refreshed?.lead?.name ?? null,
+      company: refreshed?.lead?.company ?? null,
+      phone: refreshed?.lead?.phone ?? null,
+      serviceInterest: refreshed?.lead?.serviceInterest ?? null,
+      leadGoal: refreshed?.lead?.leadGoal ?? null,
+      estimatedVolume: refreshed?.lead?.estimatedVolume ?? null,
+      status: refreshed?.lead?.status ?? null,
       intent,
     });
 
-    // 9. Reply
-    let outboundRecord = await prisma.message.create({
-      data: {
-        conversationId: conv.id,
-        direction: "outbound",
-        type: audio ? "audio" : "text",
-        content: replyText,
-        status: "pending",
-      },
-    });
+    // 9. Reply (audio-in → audio-out, text-in → text-out)
+    await sendBotReply(workspaceId, jid, msg, conv.id, replyText, audio);
 
-    if (audio) {
-      const tts = await synthesizeSpeech(
-        replyText,
-        path.resolve(env.MEDIA_PATH),
-        `out_${outboundRecord.id}`,
-      );
-      if (tts) {
-        const buffer = await fs.readFile(tts.filePath);
-        const sent = await sendAudio(jid, buffer, msg);
-        outboundRecord = await prisma.message.update({
-          where: { id: outboundRecord.id },
-          data: {
-            mediaPath: tts.filePath,
-            status: "sent",
-            whatsappId: sent?.key?.id || null,
-          },
-        });
-      } else {
-        const sent = await sendText(jid, replyText, msg);
-        outboundRecord = await prisma.message.update({
-          where: { id: outboundRecord.id },
-          data: {
-            type: "text",
-            status: "sent",
-            whatsappId: sent?.key?.id || null,
-          },
-        });
-      }
-    } else {
-      const sent = await sendText(jid, replyText, msg);
-      outboundRecord = await prisma.message.update({
-        where: { id: outboundRecord.id },
-        data: {
-          status: "sent",
-          whatsappId: sent?.key?.id || null,
-        },
-      });
-    }
-
-    waMessages.inc({ direction: "outbound", type: outboundRecord.type });
-    emit("wa.message.sent", { message: outboundRecord });
-
-    // 10. Final reaction (if different from initial 👍)
-    if (decision.reaction !== "👍") {
-      try {
-        await reactToMessage(jid, msg.key, decision.reaction);
-        await prisma.message.update({
-          where: { id: inboundMessage.id },
-          data: { reaction: decision.reaction },
-        });
-        waReactions.inc({ emoji: decision.reaction });
-        emit("wa.reaction.sent", { messageId: inboundMessage.id, emoji: decision.reaction });
-      } catch (err) {
-        logger.warn({ err }, "final reaction failed");
-      }
-    }
+    // 10. Final reaction (✅ / 👌)
+    await applyFinalReaction(workspaceId, jid, msg, inboundMessage.id, decision.reaction);
 
     logger.info(
-      { conv: conv.id, intent, status: decision.conversationStatus },
+      { conv: conv.id, intent, status: decision.conversationStatus, workspaceId },
       "inbound processed",
     );
   } catch (err) {
-    logger.error({ err }, "pipeline error");
-    emit("error", { message: "Falha ao processar mensagem", conversationId: conv.id });
+    logger.error({ err, workspaceId }, "pipeline error");
+    emit("error", { message: "Falha ao processar mensagem", conversationId: conv.id }, workspaceId);
     try {
-      await reactToMessage(jid, msg.key, "⚠️");
+      await reactToMessage(workspaceId, jid, msg.key, "⚠️");
     } catch {
       /* noop */
     }
-    throw err; // let BullMQ retry
+    throw err;
   } finally {
-    emit("ai.thinking", { conversationId: conv.id, on: false });
+    emit("ai.thinking", { conversationId: conv.id, on: false }, workspaceId);
   }
 };

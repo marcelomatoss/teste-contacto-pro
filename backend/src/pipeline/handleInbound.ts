@@ -10,11 +10,11 @@ import { processInbound } from "./processInbound.js";
  *   1. Try to enqueue the message into BullMQ (idempotent via jobId).
  *   2. If Redis is not available (degraded mode), fall back to running the
  *      pipeline inline so the bot still works without infra.
- *
- * This thin wrapper exists so message ingest stays fast and decoupled from
- * the heavy Anthropic/Whisper/TTS calls — the worker handles those out of band.
  */
-export const handleInbound = async (msg: proto.IWebMessageInfo): Promise<void> => {
+export const handleInbound = async (
+  workspaceId: string,
+  msg: proto.IWebMessageInfo,
+): Promise<void> => {
   const jid = msg.key.remoteJid;
   if (!jid) return;
   const whatsappMessageId = msg.key.id;
@@ -23,6 +23,7 @@ export const handleInbound = async (msg: proto.IWebMessageInfo): Promise<void> =
   if (isRedisAvailable()) {
     try {
       await enqueueInbound({
+        workspaceId,
         jid,
         whatsappMessageId,
         pushName: msg.pushName ?? null,
@@ -30,10 +31,9 @@ export const handleInbound = async (msg: proto.IWebMessageInfo): Promise<void> =
       });
       return;
     } catch (err) {
-      logger.warn({ err }, "enqueue failed, falling back to inline processing");
+      logger.warn({ err, workspaceId }, "enqueue failed, falling back to inline processing");
     }
   }
 
-  // Degraded mode — Redis unavailable. Process inline and absorb the cost.
-  await processInbound(msg);
+  await processInbound(workspaceId, msg);
 };

@@ -7,9 +7,37 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+// A tenant boundary. Each workspace owns one WhatsApp session, its own
+// conversations/leads/messages, and a set of users with access to it.
+model Workspace {
+  id            String         @id @default(cuid())
+  slug          String         @unique
+  name          String
+  users         User[]
+  conversations Conversation[]
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+}
+
+model User {
+  id           String    @id @default(cuid())
+  email        String    @unique
+  passwordHash String
+  name         String?
+  role         String    @default("member") // owner | admin | member
+  workspaceId  String
+  workspace    Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@index([workspaceId])
+}
+
 model Conversation {
   id           String    @id @default(cuid())
-  whatsappJid  String    @unique
+  workspaceId  String
+  workspace    Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  whatsappJid  String
   contactName  String?
   status       String    @default("active") // active | needs_human | opt_out
   intent       String?
@@ -17,6 +45,9 @@ model Conversation {
   messages     Message[]
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
+
+  @@unique([workspaceId, whatsappJid])
+  @@index([workspaceId])
 }
 
 model Lead {

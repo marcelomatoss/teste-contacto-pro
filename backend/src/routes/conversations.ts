@@ -1,10 +1,14 @@
 import { Router } from "express";
 import { prisma } from "../db/client.js";
+import { requireAuth } from "../auth/middleware.js";
 
 export const conversationsRouter = Router();
 
-conversationsRouter.get("/", async (_req, res) => {
+conversationsRouter.use(requireAuth);
+
+conversationsRouter.get("/", async (req, res) => {
   const list = await prisma.conversation.findMany({
+    where: { workspaceId: req.user!.workspaceId },
     include: { lead: true, messages: { take: 1, orderBy: { createdAt: "desc" } } },
     orderBy: { updatedAt: "desc" },
   });
@@ -12,9 +16,8 @@ conversationsRouter.get("/", async (_req, res) => {
 });
 
 conversationsRouter.get("/:id", async (req, res) => {
-  const id = req.params.id;
-  const conversation = await prisma.conversation.findUnique({
-    where: { id },
+  const conversation = await prisma.conversation.findFirst({
+    where: { id: req.params.id, workspaceId: req.user!.workspaceId },
     include: { lead: true },
   });
   if (!conversation) {
@@ -25,9 +28,16 @@ conversationsRouter.get("/:id", async (req, res) => {
 });
 
 conversationsRouter.get("/:id/messages", async (req, res) => {
-  const id = req.params.id;
+  const conv = await prisma.conversation.findFirst({
+    where: { id: req.params.id, workspaceId: req.user!.workspaceId },
+    select: { id: true },
+  });
+  if (!conv) {
+    res.status(404).json({ error: "Conversation not found" });
+    return;
+  }
   const messages = await prisma.message.findMany({
-    where: { conversationId: id },
+    where: { conversationId: conv.id },
     orderBy: { createdAt: "asc" },
   });
   res.json(messages);

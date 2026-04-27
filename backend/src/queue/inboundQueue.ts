@@ -30,7 +30,7 @@ export const getInboundQueue = (): Queue<InboundJobPayload> => {
  */
 export const enqueueInbound = async (payload: InboundJobPayload): Promise<void> => {
   const q = getInboundQueue();
-  const jobId = `${payload.jid}_${payload.whatsappMessageId}`;
+  const jobId = `${payload.workspaceId}_${payload.jid}_${payload.whatsappMessageId}`;
   await q.add("process", payload, { jobId });
   logger.debug({ jobId }, "inbound enqueued");
 };

@@ -17,6 +17,15 @@ const envSchema = z.object({
   CORS_ORIGIN: z.string().default("http://localhost:5173"),
   REDIS_URL: z.string().default("redis://localhost:6379"),
 
+  // Auth
+  JWT_SECRET: z.string().min(16).default("change-me-in-production-please-use-a-real-secret"),
+  JWT_TTL_HOURS: z.coerce.number().default(72),
+  // Seeded on first boot if no users exist yet
+  ADMIN_EMAIL: z.string().default("admin@contactpro.local"),
+  ADMIN_PASSWORD: z.string().default("contactpro"),
+  DEFAULT_WORKSPACE_NAME: z.string().default("Default Workspace"),
+  DEFAULT_WORKSPACE_SLUG: z.string().default("default"),
+
   AI_PROVIDER: z.enum(["anthropic", "openai"]).default("anthropic"),
   AI_MODEL: z.string().default("claude-sonnet-4-5-20250929"),
   AI_API_KEY: z.string().optional(),

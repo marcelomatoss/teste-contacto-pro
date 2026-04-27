@@ -12,52 +12,64 @@ import path from "node:path";
 import fs from "node:fs/promises";
 import { env } from "../config/env.js";
 import { logger } from "../config/logger.js";
-import { emit, setLastConnectionState } from "../realtime/socket.js";
+import {
+  emit,
+  setLastConnectionState,
+  type ConnectionStatus as WASStatus,
+} from "../realtime/socket.js";
 
-let sock: WASocket | null = null;
-let connectInProgress = false;
+interface WorkspaceSocket {
+  sock: WASocket | null;
+  connectInProgress: boolean;
+  /** ids of messages this bot just sent (for self-chat dedup) */
+  sentByBot: Set<string>;
+}
 
-// Tracks message IDs that the bot itself just sent, so we can ignore them
-// when WhatsApp echoes them back via messages.upsert (which would otherwise
-// create an infinite loop in the self-chat test mode).
-const sentByBot = new Set<string>();
-const trackSent = (id: string | null | undefined) => {
+const sockets = new Map<string, WorkspaceSocket>();
+
+const trackSent = (ws: WorkspaceSocket, id: string | null | undefined) => {
   if (!id) return;
-  sentByBot.add(id);
-  if (sentByBot.size > 500) {
-    // bound the set so it does not grow forever
-    const first = sentByBot.values().next().value;
-    if (first) sentByBot.delete(first);
+  ws.sentByBot.add(id);
+  if (ws.sentByBot.size > 500) {
+    const first = ws.sentByBot.values().next().value;
+    if (first) ws.sentByBot.delete(first);
   }
 };
 
-const normalizeJid = (jid: string | null | undefined): string => {
-  if (!jid) return "";
-  // Baileys exposes own user id as `5511999...:1@s.whatsapp.net`; the
-  // self-chat JID drops the device suffix.
-  return jid.replace(/:\d+@/, "@");
-};
+const normalizeJid = (jid: string | null | undefined): string =>
+  jid ? jid.replace(/:\d+@/, "@") : "";
 
-export type InboundHandler = (message: proto.IWebMessageInfo) => Promise<void>;
+export type InboundHandler = (
+  workspaceId: string,
+  message: proto.IWebMessageInfo,
+) => Promise<void>;
 
 let inboundHandler: InboundHandler | null = null;
-
 export const setInboundHandler = (h: InboundHandler) => {
   inboundHandler = h;
 };
 
-export const getSocket = () => sock;
+const sessionPathFor = (workspaceId: string): string =>
+  path.resolve(env.WHATSAPP_SESSION_PATH, workspaceId);
 
-const ensureDir = async (dir: string) => {
-  await fs.mkdir(dir, { recursive: true });
+const ensureWorkspaceState = (workspaceId: string): WorkspaceSocket => {
+  let ws = sockets.get(workspaceId);
+  if (!ws) {
+    ws = { sock: null, connectInProgress: false, sentByBot: new Set() };
+    sockets.set(workspaceId, ws);
+  }
+  return ws;
 };
 
+export const getWASocket = (workspaceId: string): WASocket | null =>
+  sockets.get(workspaceId)?.sock ?? null;
+
 /**
- * Wipes the persisted Baileys credentials so the next `startWhatsApp()`
- * triggers a fresh QR pairing flow.
+ * Wipes the persisted Baileys credentials for a single workspace so the next
+ * `startWhatsApp(workspaceId)` triggers a fresh QR pairing flow.
  */
-const wipeSessionFiles = async (): Promise<void> => {
-  const sessionPath = path.resolve(env.WHATSAPP_SESSION_PATH);
+const wipeSessionFiles = async (workspaceId: string): Promise<void> => {
+  const sessionPath = sessionPathFor(workspaceId);
   try {
     const entries = await fs.readdir(sessionPath);
     await Promise.all(
@@ -65,49 +77,28 @@ const wipeSessionFiles = async (): Promise<void> => {
         fs.rm(path.join(sessionPath, entry), { recursive: true, force: true }),
       ),
     );
-    logger.info("WhatsApp session files wiped");
+    logger.info({ workspaceId }, "WhatsApp session files wiped");
   } catch (err) {
-    logger.error({ err }, "failed to wipe session files");
+    logger.error({ err, workspaceId }, "failed to wipe session files");
   }
 };
 
 /**
- * User-initiated disconnect. Tells WhatsApp servers about the logout (if a
- * socket exists), then wipes the local session and reopens a fresh socket
- * which will publish a new QR over the realtime channel.
- *
- * Safe to call when already disconnected — it just re-creates the socket.
+ * Starts (or reconnects) the Baileys socket for a workspace. Idempotent:
+ * if a connection is already in progress for that workspace, it just
+ * returns the existing one.
  */
-export const logoutAndReset = async (): Promise<void> => {
-  logger.info("WhatsApp logout requested by user");
-  if (sock) {
-    try {
-      await sock.logout("requested by user");
-      // sock.logout() triggers `connection.update` with DisconnectReason.loggedOut
-      // which the handler below catches to wipe + reconnect. Done.
-      return;
-    } catch (err) {
-      logger.warn({ err }, "sock.logout failed, falling back to local reset");
-    }
-  }
-  // No active socket or remote logout failed — wipe locally and restart.
-  await wipeSessionFiles();
-  sock = null;
-  connectInProgress = false;
-  await startWhatsApp();
-};
+export const startWhatsApp = async (workspaceId: string): Promise<WASocket | null> => {
+  const ws = ensureWorkspaceState(workspaceId);
+  if (ws.connectInProgress) return ws.sock;
+  ws.connectInProgress = true;
 
-export const startWhatsApp = async () => {
-  if (connectInProgress) return;
-  connectInProgress = true;
-
-  const sessionPath = path.resolve(env.WHATSAPP_SESSION_PATH);
-  await ensureDir(sessionPath);
+  const sessionPath = sessionPathFor(workspaceId);
+  await fs.mkdir(sessionPath, { recursive: true });
 
   const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
   const { version } = await fetchLatestBaileysVersion();
 
-  // Pino-compatible silent logger to avoid Baileys' verbose noise.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const baileysLogger: any = {
     level: "silent",
@@ -120,7 +111,7 @@ export const startWhatsApp = async () => {
     child: () => baileysLogger,
   };
 
-  sock = makeWASocket({
+  const sock = makeWASocket({
     version,
     auth: state,
     printQRInTerminal: false,
@@ -129,56 +120,54 @@ export const startWhatsApp = async () => {
     syncFullHistory: false,
   });
 
+  ws.sock = sock;
+
   sock.ev.on("creds.update", saveCreds);
 
   sock.ev.on("connection.update", async (update) => {
     const { connection, lastDisconnect, qr } = update;
 
     if (qr) {
-      logger.info("WhatsApp QR code received, scan to authenticate");
+      logger.info({ workspaceId }, "WhatsApp QR code received, scan to authenticate");
       try {
         const dataUrl = await qrcode.toDataURL(qr, { margin: 1, width: 320 });
-        setLastConnectionState({ status: "qr", qr: dataUrl });
-        emit("wa.connection.update", { status: "qr", qr: dataUrl });
+        setLastConnectionState(workspaceId, { status: "qr", qr: dataUrl });
+        emit("wa.connection.update", { status: "qr", qr: dataUrl }, workspaceId);
         const ascii = await qrcode.toString(qr, { type: "terminal", small: true });
         // eslint-disable-next-line no-console
-        console.log("\n" + ascii + "\n");
+        console.log(`\n[workspace ${workspaceId}]\n` + ascii + "\n");
       } catch (err) {
-        logger.error({ err }, "failed to render QR");
+        logger.error({ err, workspaceId }, "failed to render QR");
       }
     }
 
     if (connection === "connecting") {
-      setLastConnectionState({ status: "connecting", qr: null });
-      emit("wa.connection.update", { status: "connecting" });
+      setLastConnectionState(workspaceId, { status: "connecting", qr: null });
+      emit("wa.connection.update", { status: "connecting" }, workspaceId);
     }
 
     if (connection === "open") {
-      logger.info("WhatsApp connection open");
-      setLastConnectionState({ status: "connected", qr: null });
-      emit("wa.connection.update", { status: "connected" });
+      logger.info({ workspaceId }, "WhatsApp connection open");
+      setLastConnectionState(workspaceId, { status: "connected", qr: null });
+      emit("wa.connection.update", { status: "connected" }, workspaceId);
     }
 
     if (connection === "close") {
       const statusCode = (lastDisconnect?.error as Boom | undefined)?.output?.statusCode;
       const isLoggedOut = statusCode === DisconnectReason.loggedOut;
-      logger.warn({ statusCode, isLoggedOut }, "WhatsApp connection closed");
-      setLastConnectionState({ status: "disconnected", qr: null });
-      emit("wa.connection.update", { status: "disconnected" });
-      sock = null;
-      connectInProgress = false;
+      logger.warn({ statusCode, isLoggedOut, workspaceId }, "WhatsApp connection closed");
+      setLastConnectionState(workspaceId, { status: "disconnected", qr: null });
+      emit("wa.connection.update", { status: "disconnected" }, workspaceId);
+      ws.sock = null;
+      ws.connectInProgress = false;
 
       if (isLoggedOut) {
-        // User logged out (from phone, from API, or remote ban): the local
-        // creds are now stale, and re-using them just yields another 401.
-        // Wipe the session and start a fresh connection — Baileys will
-        // emit a new QR which the realtime layer pushes to the frontend.
-        await wipeSessionFiles();
+        await wipeSessionFiles(workspaceId);
       }
-
-      // Always attempt to reconnect — fresh QR after logout, otherwise resume.
       setTimeout(() => {
-        startWhatsApp().catch((err) => logger.error({ err }, "reconnect failed"));
+        startWhatsApp(workspaceId).catch((err) =>
+          logger.error({ err, workspaceId }, "reconnect failed"),
+        );
       }, 1500);
     }
   });
@@ -188,45 +177,48 @@ export const startWhatsApp = async () => {
     for (const msg of event.messages) {
       if (!msg.message) continue;
       if (!inboundHandler) continue;
+      if (msg.key.id && ws.sentByBot.has(msg.key.id)) continue;
 
-      // Skip messages the bot itself just sent (avoids loops on self-chat).
-      if (msg.key.id && sentByBot.has(msg.key.id)) continue;
-
-      // Allow `fromMe` only when the user is messaging themselves —
-      // i.e. WhatsApp's "Message yourself" feature. This makes single-number
-      // testing possible without breaking normal behaviour.
-      const ownJid = normalizeJid(sock?.user?.id);
+      const ownJid = normalizeJid(sock.user?.id);
       const remoteJid = normalizeJid(msg.key.remoteJid);
       const isSelfChat = Boolean(ownJid) && remoteJid === ownJid;
 
       if (msg.key.fromMe && !isSelfChat) continue;
 
       try {
-        await inboundHandler(msg);
+        await inboundHandler(workspaceId, msg);
       } catch (err) {
-        logger.error({ err, key: msg.key }, "inbound handler error");
+        logger.error({ err, key: msg.key, workspaceId }, "inbound handler error");
       }
     }
   });
 
-  connectInProgress = false;
+  ws.connectInProgress = false;
   return sock;
 };
 
-export const sendText = async (jid: string, text: string, quoted?: proto.IWebMessageInfo) => {
-  if (!sock) throw new Error("WhatsApp socket not initialized");
-  const result = await sock.sendMessage(jid, { text }, quoted ? { quoted } : undefined);
-  trackSent(result?.key?.id);
+export const sendText = async (
+  workspaceId: string,
+  jid: string,
+  text: string,
+  quoted?: proto.IWebMessageInfo,
+) => {
+  const ws = sockets.get(workspaceId);
+  if (!ws?.sock) throw new Error(`WhatsApp socket not initialised for workspace ${workspaceId}`);
+  const result = await ws.sock.sendMessage(jid, { text }, quoted ? { quoted } : undefined);
+  trackSent(ws, result?.key?.id);
   return result;
 };
 
 export const sendAudio = async (
+  workspaceId: string,
   jid: string,
   audioBuffer: Buffer,
   quoted?: proto.IWebMessageInfo,
 ) => {
-  if (!sock) throw new Error("WhatsApp socket not initialized");
-  const result = await sock.sendMessage(
+  const ws = sockets.get(workspaceId);
+  if (!ws?.sock) throw new Error(`WhatsApp socket not initialised for workspace ${workspaceId}`);
+  const result = await ws.sock.sendMessage(
     jid,
     {
       audio: audioBuffer,
@@ -235,19 +227,44 @@ export const sendAudio = async (
     },
     quoted ? { quoted } : undefined,
   );
-  trackSent(result?.key?.id);
+  trackSent(ws, result?.key?.id);
   return result;
 };
 
 export const reactToMessage = async (
+  workspaceId: string,
   jid: string,
   msgKey: proto.IMessageKey,
   emoji: string,
 ) => {
-  if (!sock) throw new Error("WhatsApp socket not initialized");
-  const result = await sock.sendMessage(jid, {
-    react: { text: emoji, key: msgKey },
-  });
-  trackSent(result?.key?.id);
+  const ws = sockets.get(workspaceId);
+  if (!ws?.sock) throw new Error(`WhatsApp socket not initialised for workspace ${workspaceId}`);
+  const result = await ws.sock.sendMessage(jid, { react: { text: emoji, key: msgKey } });
+  trackSent(ws, result?.key?.id);
   return result;
 };
+
+/**
+ * User-initiated disconnect for a single workspace.
+ */
+export const logoutAndReset = async (workspaceId: string): Promise<void> => {
+  logger.info({ workspaceId }, "WhatsApp logout requested by user");
+  const ws = sockets.get(workspaceId);
+  if (ws?.sock) {
+    try {
+      await ws.sock.logout("requested by user");
+      return;
+    } catch (err) {
+      logger.warn({ err, workspaceId }, "sock.logout failed, falling back to local reset");
+    }
+  }
+  await wipeSessionFiles(workspaceId);
+  if (ws) {
+    ws.sock = null;
+    ws.connectInProgress = false;
+  }
+  await startWhatsApp(workspaceId);
+};
+
+// Re-export so other modules reading the type still resolve it.
+export type { WASStatus };
