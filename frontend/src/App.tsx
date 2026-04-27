@@ -1,3 +1,5 @@
+import { Loader2 } from "lucide-react";
+import { AuthProvider, useAuth } from "./hooks/useAuth";
 import { useRealtime } from "./hooks/useRealtime";
 import TopBar from "./components/TopBar";
 import ConversationList from "./components/ConversationList";
@@ -5,8 +7,9 @@ import ChatView from "./components/ChatView";
 import LeadPanel from "./components/LeadPanel";
 import { QRPanel } from "./components/ConnectionStatus";
 import Toaster from "./components/Toaster";
+import LoginPage from "./pages/LoginPage";
 
-function App() {
+function Inbox() {
   const {
     whatsapp,
     services,
@@ -59,6 +62,26 @@ function App() {
 
       <Toaster errors={errors} />
     </div>
+  );
+}
+
+function Gate() {
+  const { user, loading } = useAuth();
+  if (loading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center">
+        <Loader2 className="h-6 w-6 animate-spin text-brand-600" aria-label="Carregando" />
+      </div>
+    );
+  }
+  return user ? <Inbox /> : <LoginPage />;
+}
+
+function App() {
+  return (
+    <AuthProvider>
+      <Gate />
+    </AuthProvider>
   );
 }
 

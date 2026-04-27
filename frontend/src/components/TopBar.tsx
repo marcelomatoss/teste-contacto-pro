@@ -3,6 +3,7 @@ import clsx from "clsx";
 import { ConnectionPill } from "./ConnectionStatus";
 import BrandMark from "./BrandMark";
 import LogoutButton from "./LogoutButton";
+import UserMenu from "./UserMenu";
 import type { ConnectionStatus } from "../lib/types";
 
 interface Props {
@@ -75,6 +76,9 @@ export const TopBar = ({ status, services }: Props) => {
         <div className="ml-1 flex items-center gap-1">
           <ConnectionPill status={status} />
           <LogoutButton status={status} />
+        </div>
+        <div className="ml-2 border-l border-slate-200/60 pl-3">
+          <UserMenu />
         </div>
       </div>
     </header>

@@ -55,7 +55,7 @@ export const useRealtime = () => {
     });
   }, []);
 
-  // Initial load
+  // Initial load — runs once per mount (mounted only when authenticated)
   useEffect(() => {
     api
       .status()
@@ -70,14 +70,13 @@ export const useRealtime = () => {
       .listConversations()
       .then((list) => {
         setConversations(list);
-        if (list.length > 0 && !selectedId) {
-          setSelectedId(list[0].id);
+        if (list.length > 0) {
+          setSelectedId((prev) => prev ?? list[0].id);
         }
       })
       .catch(() => {
         /* noop */
       });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Load messages when selecting a conversation
