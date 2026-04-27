@@ -67,5 +67,5 @@ Mapeamento serviceInterest:
   "estimatedVolume": "<volume aproximado em texto curto | null>"
 }`;
 
-  return askLLMForJSON<LeadExtraction>(prompt, schema);
+  return askLLMForJSON<LeadExtraction>(prompt, schema, "qualify");
 };

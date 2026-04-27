@@ -4,6 +4,7 @@ import { env, isAIConfigured } from "../config/env.js";
 import { logger } from "../config/logger.js";
 import { CONTACT_PRO_KNOWLEDGE_BASE } from "../knowledge/contactpro.js";
 import { retrieve } from "./rag.js";
+import { timeAICall } from "../observability/metrics.js";
 
 let anthropic: Anthropic | null = null;
 let openai: OpenAI | null = null;
@@ -100,82 +101,89 @@ export const generateReply = async (
 
   const system = buildSystemPrompt(lead, retrievedContext);
 
-  if (env.AI_PROVIDER === "anthropic") {
-    const client = getAnthropic();
-    if (!client) throw new Error("Anthropic client not configured");
+  return timeAICall("chat", async () => {
+    if (env.AI_PROVIDER === "anthropic") {
+      const client = getAnthropic();
+      if (!client) throw new Error("Anthropic client not configured");
 
-    const response = await client.messages.create({
+      const response = await client.messages.create({
+        model: env.AI_MODEL,
+        max_tokens: 512,
+        system,
+        messages: history.map((m) => ({ role: m.role, content: m.content })),
+      });
+
+      const text = response.content
+        .filter((c): c is Anthropic.TextBlock => c.type === "text")
+        .map((c) => c.text)
+        .join("\n")
+        .trim();
+
+      return text || "Desculpe, não consegui gerar uma resposta agora.";
+    }
+
+    const client = getOpenAI();
+    if (!client) throw new Error("OpenAI client not configured");
+
+    const response = await client.chat.completions.create({
       model: env.AI_MODEL,
       max_tokens: 512,
-      system,
-      messages: history.map((m) => ({ role: m.role, content: m.content })),
+      messages: [
+        { role: "system", content: system },
+        ...history.map((m) => ({ role: m.role, content: m.content })),
+      ],
     });
 
-    const text = response.content
-      .filter((c): c is Anthropic.TextBlock => c.type === "text")
-      .map((c) => c.text)
-      .join("\n")
-      .trim();
-
-    return text || "Desculpe, não consegui gerar uma resposta agora.";
-  }
-
-  // OpenAI fallback
-  const client = getOpenAI();
-  if (!client) throw new Error("OpenAI client not configured");
-
-  const response = await client.chat.completions.create({
-    model: env.AI_MODEL,
-    max_tokens: 512,
-    messages: [
-      { role: "system", content: system },
-      ...history.map((m) => ({ role: m.role, content: m.content })),
-    ],
+    return (
+      response.choices[0]?.message?.content?.trim() ||
+      "Desculpe, não consegui gerar uma resposta agora."
+    );
   });
-
-  return response.choices[0]?.message?.content?.trim() || "Desculpe, não consegui gerar uma resposta agora.";
 };
 
 export const askLLMForJSON = async <T>(
   prompt: string,
   schemaDescription: string,
+  op: string = "json",
 ): Promise<T | null> => {
   if (!isAIConfigured()) return null;
 
   const fullPrompt = `${prompt}\n\nResponda APENAS com JSON válido seguindo este schema:\n${schemaDescription}\n\nNão inclua texto fora do JSON. Não use markdown.`;
 
   try {
-    if (env.AI_PROVIDER === "anthropic") {
-      const client = getAnthropic();
-      if (!client) return null;
+    return await timeAICall(op, async () => {
+      if (env.AI_PROVIDER === "anthropic") {
+        const client = getAnthropic();
+        if (!client) return null as T | null;
 
-      const response = await client.messages.create({
+        const response = await client.messages.create({
+          model: env.AI_MODEL,
+          max_tokens: 512,
+          messages: [{ role: "user", content: fullPrompt }],
+        });
+
+        const text = response.content
+          .filter((c): c is Anthropic.TextBlock => c.type === "text")
+          .map((c) => c.text)
+          .join("")
+          .trim();
+
+        const cleaned = text.replace(/^```json\s*/i, "").replace(/```\s*$/, "").trim();
+        return JSON.parse(cleaned) as T;
+      }
+
+      const client = getOpenAI();
+      if (!client) return null as T | null;
+      const response = await client.chat.completions.create({
         model: env.AI_MODEL,
         max_tokens: 512,
+        response_format: { type: "json_object" },
         messages: [{ role: "user", content: fullPrompt }],
       });
-
-      const text = response.content
-        .filter((c): c is Anthropic.TextBlock => c.type === "text")
-        .map((c) => c.text)
-        .join("")
-        .trim();
-
-      const cleaned = text.replace(/^```json\s*/i, "").replace(/```\s*$/, "").trim();
-      return JSON.parse(cleaned) as T;
-    }
-
-    const client = getOpenAI();
-    if (!client) return null;
-    const response = await client.chat.completions.create({
-      model: env.AI_MODEL,
-      max_tokens: 512,
-      response_format: { type: "json_object" },
-      messages: [{ role: "user", content: fullPrompt }],
+      const text = response.choices[0]?.message?.content?.trim();
+      if (!text) return null as T | null;
+      return JSON.parse(text) as T;
     });
-    const text = response.choices[0]?.message?.content?.trim();
-    if (!text) return null;
-    return JSON.parse(text) as T;
   } catch (err) {
     logger.error({ err }, "askLLMForJSON failed");
     return null;

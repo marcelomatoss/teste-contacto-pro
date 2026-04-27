@@ -51,7 +51,7 @@ Mensagem mais recente do LEAD:
   "confidence": <number entre 0 e 1>
 }`;
 
-  const result = await askLLMForJSON<IntentResult>(prompt, schema);
+  const result = await askLLMForJSON<IntentResult>(prompt, schema, "classify");
   if (!result) return "general_question";
   if (!INTENT_VALUES.includes(result.intent)) return "general_question";
   return result.intent;

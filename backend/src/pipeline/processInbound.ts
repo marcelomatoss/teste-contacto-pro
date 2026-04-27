@@ -21,6 +21,12 @@ import { generateReply, type ChatMessage, type LeadSnapshot } from "../ai/llm.js
 import { classifyIntent } from "../ai/intent.js";
 import { qualifyLead } from "../ai/qualify.js";
 import { decideStatusAndReaction } from "./decideStatus.js";
+import {
+  intentClassified,
+  leadStatusTransition,
+  waMessages,
+  waReactions,
+} from "../observability/metrics.js";
 
 const HISTORY_LIMIT = 20;
 
@@ -105,6 +111,7 @@ export const processInbound = async (msg: proto.IWebMessageInfo): Promise<void> 
     },
   });
 
+  waMessages.inc({ direction: "inbound", type: audio ? "audio" : "text" });
   emit("wa.message.received", { message: inboundMessage, conversation: conv });
 
   // 2. Audio → download + transcribe
@@ -149,6 +156,7 @@ export const processInbound = async (msg: proto.IWebMessageInfo): Promise<void> 
       where: { id: inboundMessage.id },
       data: { reaction: "👍" },
     });
+    waReactions.inc({ emoji: "👍" });
     emit("wa.reaction.sent", { messageId: inboundMessage.id, emoji: "👍" });
   } catch (err) {
     logger.warn({ err }, "initial reaction failed (continuing)");
@@ -177,8 +185,14 @@ export const processInbound = async (msg: proto.IWebMessageInfo): Promise<void> 
       qualifyLead(history, userText, leadSnapshot),
     ]);
 
+    intentClassified.inc({ intent });
+
     // 6. Decide status / reaction (pure function, see decideStatus.ts)
-    const decision = decideStatusAndReaction(intent, lead?.status || "new");
+    const previousStatus = lead?.status || "new";
+    const decision = decideStatusAndReaction(intent, previousStatus);
+    if (lead && previousStatus !== decision.leadStatus) {
+      leadStatusTransition.inc({ from: previousStatus, to: decision.leadStatus });
+    }
 
     // 7. Persist intent + lead update
     await prisma.conversation.update({
@@ -278,6 +292,7 @@ export const processInbound = async (msg: proto.IWebMessageInfo): Promise<void> 
       });
     }
 
+    waMessages.inc({ direction: "outbound", type: outboundRecord.type });
     emit("wa.message.sent", { message: outboundRecord });
 
     // 10. Final reaction (if different from initial 👍)
@@ -288,6 +303,7 @@ export const processInbound = async (msg: proto.IWebMessageInfo): Promise<void> 
           where: { id: inboundMessage.id },
           data: { reaction: decision.reaction },
         });
+        waReactions.inc({ emoji: decision.reaction });
         emit("wa.reaction.sent", { messageId: inboundMessage.id, emoji: decision.reaction });
       } catch (err) {
         logger.warn({ err }, "final reaction failed");

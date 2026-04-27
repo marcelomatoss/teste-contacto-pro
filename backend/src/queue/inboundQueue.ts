@@ -2,6 +2,7 @@ import { Queue, Worker, type Job } from "bullmq";
 import { getRedis } from "./connection.js";
 import { INBOUND_QUEUE_NAME, type InboundJobPayload } from "./types.js";
 import { logger } from "../config/logger.js";
+import { queueInFlight, queueJobs } from "../observability/metrics.js";
 
 let queue: Queue<InboundJobPayload> | null = null;
 
@@ -44,12 +45,17 @@ export const startInboundWorker = (processor: InboundProcessor): Worker<InboundJ
     INBOUND_QUEUE_NAME,
     async (job) => {
       const start = Date.now();
+      queueInFlight.inc();
       logger.debug({ jobId: job.id, attempt: job.attemptsMade + 1 }, "processing inbound job");
-      await processor(job.data, job);
-      logger.info(
-        { jobId: job.id, duration: Date.now() - start, attempt: job.attemptsMade + 1 },
-        "inbound job done",
-      );
+      try {
+        await processor(job.data, job);
+        logger.info(
+          { jobId: job.id, duration: Date.now() - start, attempt: job.attemptsMade + 1 },
+          "inbound job done",
+        );
+      } finally {
+        queueInFlight.dec();
+      }
     },
     {
       connection: getRedis(),
@@ -58,7 +64,12 @@ export const startInboundWorker = (processor: InboundProcessor): Worker<InboundJ
     },
   );
 
+  worker.on("completed", () => {
+    queueJobs.inc({ outcome: "completed" });
+  });
+
   worker.on("failed", (job, err) => {
+    queueJobs.inc({ outcome: "failed" });
     logger.error(
       { jobId: job?.id, err: err.message, attempt: job?.attemptsMade },
       "inbound job failed",

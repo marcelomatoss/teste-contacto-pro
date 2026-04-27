@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { env, isTTSConfigured } from "../config/env.js";
 import { logger } from "../config/logger.js";
+import { timeAICall } from "../observability/metrics.js";
 
 let openai: OpenAI | null = null;
 
@@ -31,19 +32,17 @@ export const synthesizeSpeech = async (
   const client = getClient();
   if (!client) return null;
 
-  await fs.mkdir(outDir, { recursive: true });
-
-  const filePath = path.join(outDir, `${filename}.ogg`);
-
-  const response = await client.audio.speech.create({
-    model: env.TTS_MODEL,
-    voice: env.TTS_VOICE as "alloy" | "echo" | "fable" | "onyx" | "nova" | "shimmer",
-    input: text,
-    response_format: "opus",
+  return timeAICall("tts", async () => {
+    await fs.mkdir(outDir, { recursive: true });
+    const filePath = path.join(outDir, `${filename}.ogg`);
+    const response = await client.audio.speech.create({
+      model: env.TTS_MODEL,
+      voice: env.TTS_VOICE as "alloy" | "echo" | "fable" | "onyx" | "nova" | "shimmer",
+      input: text,
+      response_format: "opus",
+    });
+    const buffer = Buffer.from(await response.arrayBuffer());
+    await fs.writeFile(filePath, buffer);
+    return { filePath, format: "ogg" as const };
   });
-
-  const buffer = Buffer.from(await response.arrayBuffer());
-  await fs.writeFile(filePath, buffer);
-
-  return { filePath, format: "ogg" };
 };

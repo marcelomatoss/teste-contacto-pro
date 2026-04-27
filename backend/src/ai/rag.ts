@@ -5,6 +5,7 @@ import crypto from "node:crypto";
 import { env } from "../config/env.js";
 import { logger } from "../config/logger.js";
 import { CONTACT_PRO_KNOWLEDGE_BASE } from "../knowledge/contactpro.js";
+import { timeAICall } from "../observability/metrics.js";
 
 const EMBED_MODEL = "text-embedding-3-small";
 const EMBED_DIMS = 1536;
@@ -117,11 +118,13 @@ const embedTexts = async (texts: string[]): Promise<number[][]> => {
     // logic exercises the retrieval path.
     return texts.map((t) => deterministicEmbedding(t));
   }
-  const resp = await client.embeddings.create({
-    model: EMBED_MODEL,
-    input: texts,
+  return timeAICall("embed", async () => {
+    const resp = await client.embeddings.create({
+      model: EMBED_MODEL,
+      input: texts,
+    });
+    return resp.data.map((d) => d.embedding);
   });
-  return resp.data.map((d) => d.embedding);
 };
 
 /**

@@ -2,6 +2,7 @@ import OpenAI from "openai";
 import fs from "node:fs";
 import { env, isSTTConfigured } from "../config/env.js";
 import { logger } from "../config/logger.js";
+import { timeAICall } from "../observability/metrics.js";
 
 let openai: OpenAI | null = null;
 
@@ -25,16 +26,16 @@ export const transcribeAudio = async (filePath: string): Promise<string> => {
     throw new Error(`Audio file not found: ${filePath}`);
   }
 
-  const stream = fs.createReadStream(filePath);
-
-  const transcription = await client.audio.transcriptions.create({
-    file: stream,
-    model: env.STT_MODEL,
-    language: "pt",
-    response_format: "text",
+  return timeAICall("stt", async () => {
+    const stream = fs.createReadStream(filePath);
+    const transcription = await client.audio.transcriptions.create({
+      file: stream,
+      model: env.STT_MODEL,
+      language: "pt",
+      response_format: "text",
+    });
+    return typeof transcription === "string"
+      ? transcription.trim()
+      : (transcription as { text: string }).text?.trim() || "";
   });
-
-  return typeof transcription === "string"
-    ? transcription.trim()
-    : (transcription as { text: string }).text?.trim() || "";
 };

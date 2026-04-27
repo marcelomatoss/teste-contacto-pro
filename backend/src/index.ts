@@ -11,6 +11,8 @@ import { conversationsRouter } from "./routes/conversations.js";
 import { mediaRouter } from "./routes/media.js";
 import { statusRouter } from "./routes/status.js";
 import { whatsappRouter } from "./routes/whatsapp.js";
+import { metricsRouter } from "./routes/metrics.js";
+import { httpMetricsMiddleware } from "./observability/httpMiddleware.js";
 import { setInboundHandler, startWhatsApp } from "./whatsapp/client.js";
 import { handleInbound } from "./pipeline/handleInbound.js";
 import { processInbound } from "./pipeline/processInbound.js";
@@ -25,8 +27,10 @@ async function bootstrap() {
   const app = express();
   app.use(cors({ origin: env.CORS_ORIGIN, credentials: true }));
   app.use(express.json({ limit: "1mb" }));
+  app.use(httpMetricsMiddleware);
 
   app.get("/health", (_req, res) => res.json({ ok: true, ts: Date.now() }));
+  app.use("/metrics", metricsRouter);
   app.use("/api/status", statusRouter);
   app.use("/api/conversations", conversationsRouter);
   app.use("/api/media", mediaRouter);
