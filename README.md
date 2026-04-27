@@ -140,29 +140,42 @@ Login pelo frontend (`localhost:5173`) usa essas credenciais.
 
 ## Configuração do `.env`
 
-Todas as variáveis estão no `.env.example`. Resumo das obrigatórias:
+Todas as variáveis estão no `.env.example`. O backend suporta **duas
+configurações de IA** — escolha uma:
+
+### Opção A — Anthropic + OpenAI (recomendada)
+
+Claude para o chat, OpenAI para áudio e embeddings. **Duas chaves**:
 
 ```env
-# LLM
-AI_PROVIDER=anthropic                            # anthropic | openai
+AI_PROVIDER=anthropic
 AI_MODEL=claude-sonnet-4-5-20250929
-AI_API_KEY=sk-ant-...
+AI_API_KEY=sk-ant-...        # Anthropic
 
-# STT (transcrição de áudio)
 STT_PROVIDER=openai
-STT_API_KEY=sk-...
+STT_API_KEY=sk-...           # OpenAI
 
-# TTS (resposta em áudio)
 TTS_PROVIDER=openai
 TTS_MODEL=gpt-4o-mini-tts
-TTS_VOICE=alloy
-TTS_API_KEY=sk-...
+TTS_API_KEY=sk-...           # mesma chave OpenAI
 ```
 
-> Sem `AI_API_KEY`, o bot ainda **conecta no WhatsApp** e mostra mensagens em
-> tempo real, mas responde com uma mensagem placeholder em vez de chamar a IA.
-> Sem STT, áudios chegam mas não são transcritos. Sem TTS, áudios recebidos
-> são respondidos em texto (fallback automático).
+### Opção B — Só OpenAI (uma única chave)
+
+GPT-4o-mini para chat + STT + TTS + embeddings. **Uma chave só**:
+
+```env
+AI_PROVIDER=openai
+AI_MODEL=gpt-4o-mini
+AI_API_KEY=sk-...            # OpenAI
+# STT_API_KEY e TTS_API_KEY ficam em branco —
+# o backend reutiliza AI_API_KEY automaticamente
+```
+
+> Comportamento sem chaves: o bot ainda **conecta no WhatsApp** e mostra
+> mensagens em tempo real, mas responde com placeholder em vez de chamar a
+> IA. Sem STT, áudios chegam mas não são transcritos. Sem TTS, áudios
+> recebidos são respondidos em texto (fallback automático).
 
 ---
 

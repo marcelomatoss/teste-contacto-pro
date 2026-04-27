@@ -47,7 +47,21 @@ if (!parsed.success) {
   process.exit(1);
 }
 
-export const env = parsed.data;
+// Smart fallback: STT, TTS and embeddings all live at OpenAI. When the user
+// has chosen `AI_PROVIDER=openai`, they almost always want one OpenAI key
+// for everything. Reuse AI_API_KEY for STT/TTS unless the operator has
+// explicitly set them, so a minimal .env (AI_PROVIDER + AI_API_KEY) is
+// enough to bring the whole stack up.
+//
+// Anthropic users are unaffected — STT_API_KEY / TTS_API_KEY keep their
+// own (OpenAI) values, completely independent of AI_API_KEY (sk-ant-...).
+const data = parsed.data;
+if (data.AI_PROVIDER === "openai" && data.AI_API_KEY) {
+  data.STT_API_KEY ||= data.AI_API_KEY;
+  data.TTS_API_KEY ||= data.AI_API_KEY;
+}
+
+export const env = data;
 
 export const isAIConfigured = () => Boolean(env.AI_API_KEY);
 export const isSTTConfigured = () => Boolean(env.STT_API_KEY);
