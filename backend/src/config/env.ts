@@ -15,6 +15,7 @@ const envSchema = z.object({
   WHATSAPP_SESSION_PATH: z.string().default("./data/wa-session"),
   MEDIA_PATH: z.string().default("./data/media"),
   CORS_ORIGIN: z.string().default("http://localhost:5173"),
+  REDIS_URL: z.string().default("redis://localhost:6379"),
 
   AI_PROVIDER: z.enum(["anthropic", "openai"]).default("anthropic"),
   AI_MODEL: z.string().default("claude-sonnet-4-5-20250929"),

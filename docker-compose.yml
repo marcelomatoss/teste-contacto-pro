@@ -1,4 +1,21 @@
 services:
+  redis:
+    image: redis:7-alpine
+    container_name: contactpro-redis
+    restart: unless-stopped
+    # noeviction is the policy recommended by BullMQ; jobs lost to eviction
+    # would silently break retries / idempotency.
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory-policy", "noeviction"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - ./data/redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   backend:
     build:
       context: ./backend
@@ -15,6 +32,7 @@ services:
       WHATSAPP_SESSION_PATH: /app/data/wa-session
       MEDIA_PATH: /app/data/media
       CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:5173}
+      REDIS_URL: redis://redis:6379
       AI_PROVIDER: ${AI_PROVIDER:-anthropic}
       AI_MODEL: ${AI_MODEL:-claude-sonnet-4-5-20250929}
       AI_API_KEY: ${AI_API_KEY:-}
@@ -27,6 +45,9 @@ services:
       TTS_API_KEY: ${TTS_API_KEY:-}
     volumes:
       - ./data:/app/data
+    depends_on:
+      redis:
+        condition: service_healthy
 
   frontend:
     build:
