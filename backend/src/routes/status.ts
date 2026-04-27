@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { getLastConnectionState } from "../realtime/socket.js";
 import { isAIConfigured, isSTTConfigured, isTTSConfigured } from "../config/env.js";
+import { isRedisAvailable } from "../queue/connection.js";
 
 export const statusRouter = Router();
 
@@ -12,6 +13,7 @@ statusRouter.get("/", (_req, res) => {
       ai: isAIConfigured(),
       stt: isSTTConfigured(),
       tts: isTTSConfigured(),
+      queue: isRedisAvailable(),
     },
   });
 });
