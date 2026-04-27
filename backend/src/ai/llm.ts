@@ -3,6 +3,7 @@ import OpenAI from "openai";
 import { env, isAIConfigured } from "../config/env.js";
 import { logger } from "../config/logger.js";
 import { CONTACT_PRO_KNOWLEDGE_BASE } from "../knowledge/contactpro.js";
+import { retrieve } from "./rag.js";
 
 let anthropic: Anthropic | null = null;
 let openai: OpenAI | null = null;
@@ -37,7 +38,7 @@ export interface LeadSnapshot {
   intent?: string | null;
 }
 
-const buildSystemPrompt = (lead: LeadSnapshot) => {
+const buildSystemPrompt = (lead: LeadSnapshot, retrievedContext: string) => {
   const known = [
     lead.name && `Nome: ${lead.name}`,
     lead.company && `Empresa: ${lead.company}`,
@@ -52,7 +53,9 @@ const buildSystemPrompt = (lead: LeadSnapshot) => {
 
   return `Você é o assistente comercial digital da Contact Pro. Sua missão é fazer o atendimento inicial de leads no WhatsApp, explicar serviços, qualificar a oportunidade e direcionar para o time humano quando fizer sentido.
 
-${CONTACT_PRO_KNOWLEDGE_BASE}
+# Conhecimento relevante para esta conversa
+
+${retrievedContext}
 
 # Regras de comportamento
 
@@ -80,7 +83,22 @@ export const generateReply = async (
     return "Olá! Sou o assistente da Contact Pro. Estou em modo de demonstração sem chave de IA configurada. Configure AI_API_KEY no .env para conversar comigo.";
   }
 
-  const system = buildSystemPrompt(lead);
+  // RAG: pull only the chunks most relevant to the conversation so far,
+  // falling back to the full KB when retrieval is unavailable.
+  const lastUser = [...history].reverse().find((m) => m.role === "user")?.content ?? "";
+  let retrievedContext = CONTACT_PRO_KNOWLEDGE_BASE;
+  if (lastUser) {
+    try {
+      const chunks = await retrieve(lastUser, 3);
+      if (chunks.length > 0) {
+        retrievedContext = chunks.map((c) => c.content).join("\n\n---\n\n");
+      }
+    } catch (err) {
+      logger.warn({ err }, "RAG retrieval failed, using full KB");
+    }
+  }
+
+  const system = buildSystemPrompt(lead, retrievedContext);
 
   if (env.AI_PROVIDER === "anthropic") {
     const client = getAnthropic();
