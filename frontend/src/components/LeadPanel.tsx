@@ -24,17 +24,27 @@ const InfoRow = ({
   label: string;
   value: string | null | undefined;
 }) => (
-  <div className="flex items-start gap-3 px-1 py-2">
-    <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-slate-500">
+  <div className="group flex items-start gap-3 rounded-lg px-2 py-2 transition-colors hover:bg-slate-50">
+    <div
+      className={clsx(
+        "mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg ring-1 transition-colors",
+        value
+          ? "bg-brand-50 text-brand-600 ring-brand-100 group-hover:bg-brand-100"
+          : "bg-slate-100 text-slate-400 ring-slate-200",
+      )}
+    >
       <Icon className="h-3.5 w-3.5" />
     </div>
     <div className="min-w-0 flex-1">
-      <div className="text-[11px] font-medium uppercase tracking-wide text-slate-400">{label}</div>
+      <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+        {label}
+      </div>
       <div
         className={clsx(
-          "truncate text-sm",
-          value ? "font-medium text-slate-800" : "italic text-slate-400",
+          "mt-0.5 truncate text-sm",
+          value ? "font-semibold text-slate-800" : "italic text-slate-400",
         )}
+        title={value || undefined}
       >
         {value || "—"}
       </div>
@@ -46,37 +56,73 @@ const StatusBadge = ({ status }: { status: string | null | undefined }) => {
   const cls = (() => {
     switch (status) {
       case "qualified":
-        return "bg-brand-100 text-brand-800 ring-brand-200";
+        return "bg-accent-100 text-accent-800 ring-accent-200";
       case "needs_human":
         return "bg-amber-100 text-amber-800 ring-amber-200";
       case "opt_out":
         return "bg-rose-100 text-rose-700 ring-rose-200";
       case "new":
-        return "bg-blue-100 text-blue-700 ring-blue-200";
+        return "bg-brand-100 text-brand-800 ring-brand-200";
       default:
         return "bg-slate-100 text-slate-600 ring-slate-200";
+    }
+  })();
+  const dot = (() => {
+    switch (status) {
+      case "qualified":
+        return "bg-accent-500";
+      case "needs_human":
+        return "bg-amber-500";
+      case "opt_out":
+        return "bg-rose-500";
+      case "new":
+        return "bg-brand-500";
+      default:
+        return "bg-slate-400";
     }
   })();
   return (
     <span
       className={clsx(
-        "inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold ring-1",
+        "inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-bold uppercase tracking-wide ring-1",
         cls,
       )}
     >
+      <span className={clsx("h-1.5 w-1.5 rounded-full", dot)} />
       {statusLabel(status)}
     </span>
   );
 };
 
+const completeness = (lead: Conversation["lead"]): number => {
+  if (!lead) return 0;
+  const fields = [
+    lead.name,
+    lead.company,
+    lead.serviceInterest,
+    lead.leadGoal,
+    lead.estimatedVolume,
+  ];
+  const filled = fields.filter(Boolean).length;
+  return Math.round((filled / fields.length) * 100);
+};
+
 export const LeadPanel = ({ conversation }: Props) => {
   const lead = conversation?.lead;
+  const pct = completeness(lead);
 
   return (
-    <div className="flex h-full flex-col bg-white">
-      <div className="flex items-center gap-2 border-b border-slate-200 px-5 py-4">
-        <Contact className="h-4 w-4 text-slate-500" />
-        <h2 className="text-sm font-semibold text-slate-800">Lead</h2>
+    <div className="flex h-full flex-col bg-white/60 backdrop-blur">
+      <div className="flex items-center justify-between border-b border-slate-200/70 px-5 py-4">
+        <div className="flex items-center gap-2">
+          <Contact className="h-4 w-4 text-brand-600" />
+          <h2 className="font-heading text-sm font-bold text-slate-800">Lead</h2>
+        </div>
+        {conversation && (
+          <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+            {pct}% completo
+          </span>
+        )}
       </div>
 
       {!conversation ? (
@@ -85,29 +131,58 @@ export const LeadPanel = ({ conversation }: Props) => {
         </div>
       ) : (
         <div className="flex-1 overflow-y-auto px-5 py-5">
-          <div className="mb-5">
-            <div className="mb-1 text-[11px] font-medium uppercase tracking-wide text-slate-400">
-              Status do lead
+          {/* Status */}
+          <div className="mb-4">
+            <div className="mb-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+              Status
             </div>
             <StatusBadge status={lead?.status || "new"} />
           </div>
 
-          <div className="mb-5 rounded-xl bg-gradient-to-br from-brand-50 to-blue-50 p-3 ring-1 ring-brand-100">
-            <div className="mb-1 flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-brand-700">
+          {/* Completeness bar */}
+          <div className="mb-5">
+            <div className="mb-1.5 flex items-center justify-between text-[11px]">
+              <span className="font-semibold text-slate-600">Qualificação</span>
+              <span className="font-bold text-slate-800">{pct}%</span>
+            </div>
+            <div className="h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
+              <div
+                className={clsx(
+                  "h-full rounded-full transition-all duration-500",
+                  pct >= 80
+                    ? "bg-gradient-to-r from-accent-500 to-accent-600"
+                    : pct >= 40
+                      ? "bg-gradient-to-r from-brand-400 to-brand-600"
+                      : "bg-gradient-to-r from-slate-300 to-slate-400",
+                )}
+                style={{ width: `${pct}%` }}
+              />
+            </div>
+          </div>
+
+          {/* Intent */}
+          <div className="mb-5 rounded-xl bg-gradient-to-br from-brand-50 via-brand-50 to-accent-50 p-4 ring-1 ring-brand-100">
+            <div className="mb-1 flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-brand-700">
               <Sparkles className="h-3 w-3" />
               Intenção detectada
             </div>
             <div
               className={clsx(
-                "text-sm font-semibold",
-                conversation.intent ? "text-slate-800" : "italic text-slate-400",
+                "font-heading text-base font-bold",
+                conversation.intent ? "text-slate-900" : "italic text-slate-400",
               )}
             >
-              {conversation.intent ? intentLabel(conversation.intent) : "Aguardando classificação…"}
+              {conversation.intent
+                ? intentLabel(conversation.intent)
+                : "Aguardando classificação…"}
             </div>
           </div>
 
-          <div className="space-y-1">
+          {/* Lead data */}
+          <div className="mb-2 px-2 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+            Dados extraídos pela IA
+          </div>
+          <div className="space-y-0.5">
             <InfoRow icon={UserCircle} label="Nome" value={lead?.name} />
             <InfoRow icon={Building2} label="Empresa" value={lead?.company} />
             <InfoRow
@@ -128,11 +203,14 @@ export const LeadPanel = ({ conversation }: Props) => {
             />
           </div>
 
-          <div className="mt-6 rounded-xl bg-slate-50 p-3 text-[11px] leading-relaxed text-slate-500 ring-1 ring-slate-200">
-            <strong className="text-slate-700">Como os dados são preenchidos:</strong> a IA extrai
-            automaticamente nome, empresa, interesse, objetivo e volume conforme a conversa avança.
-            O status muda para <em>qualified</em> quando há fit comercial, <em>needs_human</em> ao
-            pedir consultor e <em>opt_out</em> em caso de desinteresse.
+          <div className="mt-6 rounded-xl bg-slate-50/80 p-3.5 text-[11px] leading-relaxed text-slate-500 ring-1 ring-slate-200/60">
+            <strong className="text-slate-700">Como os dados são preenchidos:</strong> a IA
+            extrai automaticamente nome, empresa, interesse, objetivo e volume conforme a
+            conversa avança. O status muda para{" "}
+            <em className="font-semibold text-accent-700">qualified</em> quando há fit
+            comercial, <em className="font-semibold text-amber-700">needs_human</em> ao
+            pedir consultor e <em className="font-semibold text-rose-700">opt_out</em> em
+            caso de desinteresse.
           </div>
         </div>
       )}

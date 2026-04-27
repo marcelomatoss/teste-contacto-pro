@@ -27,15 +27,15 @@ function App() {
       <TopBar status={whatsapp.status} services={services} />
 
       {showQR && (
-        <div className="border-b border-slate-200 bg-blue-50/30 px-6 py-5">
-          <div className="mx-auto max-w-md">
+        <div className="border-b border-slate-200/60 px-6 py-5">
+          <div className="mx-auto max-w-3xl">
             <QRPanel qr={whatsapp.qr} />
           </div>
         </div>
       )}
 
-      <main className="grid flex-1 grid-cols-[320px_minmax(0,1fr)_320px] overflow-hidden border-t border-slate-200 bg-slate-50">
-        <aside className="border-r border-slate-200 bg-white">
+      <main className="grid flex-1 grid-cols-[320px_minmax(0,1fr)_340px] overflow-hidden border-t border-slate-200/60">
+        <aside className="border-r border-slate-200/70 bg-white/70 backdrop-blur-sm">
           <ConversationList
             conversations={conversations}
             selectedId={selectedId}
@@ -52,7 +52,7 @@ function App() {
           />
         </section>
 
-        <aside className="border-l border-slate-200">
+        <aside className="border-l border-slate-200/70">
           <LeadPanel conversation={selectedConversation} />
         </aside>
       </main>
