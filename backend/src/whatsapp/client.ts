@@ -17,6 +17,27 @@ import { emit, setLastConnectionState } from "../realtime/socket.js";
 let sock: WASocket | null = null;
 let connectInProgress = false;
 
+// Tracks message IDs that the bot itself just sent, so we can ignore them
+// when WhatsApp echoes them back via messages.upsert (which would otherwise
+// create an infinite loop in the self-chat test mode).
+const sentByBot = new Set<string>();
+const trackSent = (id: string | null | undefined) => {
+  if (!id) return;
+  sentByBot.add(id);
+  if (sentByBot.size > 500) {
+    // bound the set so it does not grow forever
+    const first = sentByBot.values().next().value;
+    if (first) sentByBot.delete(first);
+  }
+};
+
+const normalizeJid = (jid: string | null | undefined): string => {
+  if (!jid) return "";
+  // Baileys exposes own user id as `5511999...:1@s.whatsapp.net`; the
+  // self-chat JID drops the device suffix.
+  return jid.replace(/:\d+@/, "@");
+};
+
 export type InboundHandler = (message: proto.IWebMessageInfo) => Promise<void>;
 
 let inboundHandler: InboundHandler | null = null;
@@ -112,9 +133,21 @@ export const startWhatsApp = async () => {
   sock.ev.on("messages.upsert", async (event) => {
     if (event.type !== "notify") return;
     for (const msg of event.messages) {
-      if (msg.key.fromMe) continue;
       if (!msg.message) continue;
       if (!inboundHandler) continue;
+
+      // Skip messages the bot itself just sent (avoids loops on self-chat).
+      if (msg.key.id && sentByBot.has(msg.key.id)) continue;
+
+      // Allow `fromMe` only when the user is messaging themselves —
+      // i.e. WhatsApp's "Message yourself" feature. This makes single-number
+      // testing possible without breaking normal behaviour.
+      const ownJid = normalizeJid(sock?.user?.id);
+      const remoteJid = normalizeJid(msg.key.remoteJid);
+      const isSelfChat = Boolean(ownJid) && remoteJid === ownJid;
+
+      if (msg.key.fromMe && !isSelfChat) continue;
+
       try {
         await inboundHandler(msg);
       } catch (err) {
@@ -129,7 +162,9 @@ export const startWhatsApp = async () => {
 
 export const sendText = async (jid: string, text: string, quoted?: proto.IWebMessageInfo) => {
   if (!sock) throw new Error("WhatsApp socket not initialized");
-  return sock.sendMessage(jid, { text }, quoted ? { quoted } : undefined);
+  const result = await sock.sendMessage(jid, { text }, quoted ? { quoted } : undefined);
+  trackSent(result?.key?.id);
+  return result;
 };
 
 export const sendAudio = async (
@@ -138,7 +173,7 @@ export const sendAudio = async (
   quoted?: proto.IWebMessageInfo,
 ) => {
   if (!sock) throw new Error("WhatsApp socket not initialized");
-  return sock.sendMessage(
+  const result = await sock.sendMessage(
     jid,
     {
       audio: audioBuffer,
@@ -147,6 +182,8 @@ export const sendAudio = async (
     },
     quoted ? { quoted } : undefined,
   );
+  trackSent(result?.key?.id);
+  return result;
 };
 
 export const reactToMessage = async (
@@ -155,7 +192,9 @@ export const reactToMessage = async (
   emoji: string,
 ) => {
   if (!sock) throw new Error("WhatsApp socket not initialized");
-  return sock.sendMessage(jid, {
+  const result = await sock.sendMessage(jid, {
     react: { text: emoji, key: msgKey },
   });
+  trackSent(result?.key?.id);
+  return result;
 };
