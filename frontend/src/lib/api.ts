@@ -22,4 +22,8 @@ export const api = {
   getMessages: (id: string) =>
     fetch(`${API_URL}/api/conversations/${id}/messages`).then(handle<Message[]>),
   mediaUrl: (messageId: string) => `${API_URL}/api/media/${messageId}`,
+  whatsappLogout: () =>
+    fetch(`${API_URL}/api/whatsapp/logout`, { method: "POST" }).then(
+      handle<{ ok: boolean; message?: string }>,
+    ),
 };

@@ -10,6 +10,7 @@ import { initSocket } from "./realtime/socket.js";
 import { conversationsRouter } from "./routes/conversations.js";
 import { mediaRouter } from "./routes/media.js";
 import { statusRouter } from "./routes/status.js";
+import { whatsappRouter } from "./routes/whatsapp.js";
 import { setInboundHandler, startWhatsApp } from "./whatsapp/client.js";
 import { handleInbound } from "./pipeline/handleInbound.js";
 import { processInbound } from "./pipeline/processInbound.js";
@@ -29,6 +30,7 @@ async function bootstrap() {
   app.use("/api/status", statusRouter);
   app.use("/api/conversations", conversationsRouter);
   app.use("/api/media", mediaRouter);
+  app.use("/api/whatsapp", whatsappRouter);
 
   app.use((_req, res) => res.status(404).json({ error: "Not found" }));
 

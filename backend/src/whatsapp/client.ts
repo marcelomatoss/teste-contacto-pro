@@ -52,6 +52,51 @@ const ensureDir = async (dir: string) => {
   await fs.mkdir(dir, { recursive: true });
 };
 
+/**
+ * Wipes the persisted Baileys credentials so the next `startWhatsApp()`
+ * triggers a fresh QR pairing flow.
+ */
+const wipeSessionFiles = async (): Promise<void> => {
+  const sessionPath = path.resolve(env.WHATSAPP_SESSION_PATH);
+  try {
+    const entries = await fs.readdir(sessionPath);
+    await Promise.all(
+      entries.map((entry) =>
+        fs.rm(path.join(sessionPath, entry), { recursive: true, force: true }),
+      ),
+    );
+    logger.info("WhatsApp session files wiped");
+  } catch (err) {
+    logger.error({ err }, "failed to wipe session files");
+  }
+};
+
+/**
+ * User-initiated disconnect. Tells WhatsApp servers about the logout (if a
+ * socket exists), then wipes the local session and reopens a fresh socket
+ * which will publish a new QR over the realtime channel.
+ *
+ * Safe to call when already disconnected — it just re-creates the socket.
+ */
+export const logoutAndReset = async (): Promise<void> => {
+  logger.info("WhatsApp logout requested by user");
+  if (sock) {
+    try {
+      await sock.logout("requested by user");
+      // sock.logout() triggers `connection.update` with DisconnectReason.loggedOut
+      // which the handler below catches to wipe + reconnect. Done.
+      return;
+    } catch (err) {
+      logger.warn({ err }, "sock.logout failed, falling back to local reset");
+    }
+  }
+  // No active socket or remote logout failed — wipe locally and restart.
+  await wipeSessionFiles();
+  sock = null;
+  connectInProgress = false;
+  await startWhatsApp();
+};
+
 export const startWhatsApp = async () => {
   if (connectInProgress) return;
   connectInProgress = true;
@@ -116,17 +161,25 @@ export const startWhatsApp = async () => {
 
     if (connection === "close") {
       const statusCode = (lastDisconnect?.error as Boom | undefined)?.output?.statusCode;
-      const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-      logger.warn({ statusCode, shouldReconnect }, "WhatsApp connection closed");
+      const isLoggedOut = statusCode === DisconnectReason.loggedOut;
+      logger.warn({ statusCode, isLoggedOut }, "WhatsApp connection closed");
       setLastConnectionState({ status: "disconnected", qr: null });
       emit("wa.connection.update", { status: "disconnected" });
+      sock = null;
       connectInProgress = false;
 
-      if (shouldReconnect) {
-        setTimeout(() => {
-          startWhatsApp().catch((err) => logger.error({ err }, "reconnect failed"));
-        }, 2000);
+      if (isLoggedOut) {
+        // User logged out (from phone, from API, or remote ban): the local
+        // creds are now stale, and re-using them just yields another 401.
+        // Wipe the session and start a fresh connection — Baileys will
+        // emit a new QR which the realtime layer pushes to the frontend.
+        await wipeSessionFiles();
       }
+
+      // Always attempt to reconnect — fresh QR after logout, otherwise resume.
+      setTimeout(() => {
+        startWhatsApp().catch((err) => logger.error({ err }, "reconnect failed"));
+      }, 1500);
     }
   });
 

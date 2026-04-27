@@ -2,6 +2,7 @@ import { Brain, ChevronRight, Layers, Mic, Volume2 } from "lucide-react";
 import clsx from "clsx";
 import { ConnectionPill } from "./ConnectionStatus";
 import BrandMark from "./BrandMark";
+import LogoutButton from "./LogoutButton";
 import type { ConnectionStatus } from "../lib/types";
 
 interface Props {
@@ -71,8 +72,9 @@ export const TopBar = ({ status, services }: Props) => {
           <ServicePill enabled={services.tts} label="TTS" icon={Volume2} />
           <ServicePill enabled={services.queue} label="QUEUE" icon={Layers} />
         </div>
-        <div className="ml-1">
+        <div className="ml-1 flex items-center gap-1">
           <ConnectionPill status={status} />
+          <LogoutButton status={status} />
         </div>
       </div>
     </header>
