@@ -1,0 +1,52 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Conversation {
+  id           String    @id @default(cuid())
+  whatsappJid  String    @unique
+  contactName  String?
+  status       String    @default("active") // active | needs_human | opt_out
+  intent       String?
+  lead         Lead?
+  messages     Message[]
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+}
+
+model Lead {
+  id              String       @id @default(cuid())
+  conversationId  String       @unique
+  conversation    Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  name            String?
+  company         String?
+  phone           String?
+  serviceInterest String?      // contact_z | contact_tel | mailing | data_enrichment | unknown
+  leadGoal        String?
+  estimatedVolume String?
+  status          String       @default("new") // new | qualified | needs_human | opt_out
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+}
+
+model Message {
+  id             String       @id @default(cuid())
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  whatsappId     String?
+  direction      String       // inbound | outbound
+  type           String       // text | audio
+  content        String?
+  mediaPath      String?
+  transcription  String?
+  status         String       @default("pending") // pending | sent | delivered | failed
+  reaction       String?
+  createdAt      DateTime     @default(now())
+
+  @@index([conversationId, createdAt])
+}
